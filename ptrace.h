@@ -6,7 +6,10 @@
 #include <sys/ptrace.h>
 
 /** Attach to process pid */
-void ptrace_attach(int pid);
+void ptrace_attach_pid(int pid);
+
+/** Attach to a child which did PTRACE_TRACEME */
+void ptrace_attach_child(int pid);
 
 /** Continue execution */
 void ptrace_cont(int pid);

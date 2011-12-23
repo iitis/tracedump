@@ -9,14 +9,22 @@
 
 #include "ptrace.h"
 
-void ptrace_attach(int pid)
+void ptrace_attach_pid(int pid)
 {
 	if ((ptrace(PTRACE_ATTACH , pid , NULL , NULL)) < 0) {
 		perror("ptrace_attach");
 		exit(-1);
 	}
 
+	ptrace_attach_child(pid);
+}
+
+void ptrace_attach_child(int pid)
+{
 	waitpid(pid, NULL, WUNTRACED);
+
+	ptrace(PTRACE_SETOPTIONS, pid, NULL,
+		PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
 }
 
 void ptrace_cont(int pid)
