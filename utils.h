@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2011 IITiS PAN Gliwice <www.iitis.pl>
+ * Author: Paweł Foremski <pjf@iitis.pl>
+ * Licensed under GNU GPL v. 3
+ */
+
 #ifndef _UTILS_H_
 #define _UTILS_H_
 
