@@ -11,9 +11,7 @@
 #include <linux/net.h>
 #include <netinet/in.h>
 
-#include "utils.h"
-#include "ptrace.h"
-#include "inject.h"
+#include "tracedump.h"
 
 struct inject *inject_init(void)
 {
@@ -78,6 +76,8 @@ code_end: if (0); /* GCC trick */
 	si->addr_offset = si->data_offset + 16;
 	si->data = (uint32_t *) (si->code + si->data_offset);
 	si->addr = (struct sockaddr_in *) (si->code + si->addr_offset);
+
+	return si;
 }
 
 void inject_free(struct inject *si)
@@ -96,7 +96,7 @@ int32_t _inject_socketcall(struct inject *si, uint32_t sc_code, bool output, pid
 	backup = ut_malloc(si->len4);
 
 	/* make backup */
-	ptrace(PTRACE_GETREGS, pid, NULL, &regs);
+	ptrace_getregs(pid, &regs);
 	ptrace_read(pid, regs.eip, backup, si->len4);
 
 	/* configure the code */
@@ -109,11 +109,11 @@ int32_t _inject_socketcall(struct inject *si, uint32_t sc_code, bool output, pid
 	ptrace_cont(pid);
 
 	/* read return code */
-	ptrace(PTRACE_GETREGS, pid, NULL, &regs2);
+	ptrace_getregs(pid, &regs2);
 
 	/* restore the original state */
 	ptrace_write(pid, regs.eip, backup, si->len4);
-	ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+	ptrace_setregs(pid, &regs);
 
 	free(backup);
 	return regs2.eax;

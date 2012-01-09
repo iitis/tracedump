@@ -63,6 +63,10 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 	buf2[len - 1] = 0;
 	socknum = atoi(buf2 + 8);
 
+	/* check if in cache */
+	if (sp->ss && sp->ss->socknum == socknum)
+		return sp->ss;
+
 	/* get socket info */
 	ss = thash_uint_get(td->socks, socknum);
 	if (!ss) {
@@ -85,6 +89,7 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 		thash_uint_set(td->socks, socknum, ss);
 	}
 
+	sp->ss = ss;
 	return ss;
 }
 
@@ -123,15 +128,13 @@ int main(int argc, char *argv[])
 		pid = fork();
 
 		if (pid == 0) {
-			ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+			ptrace_traceme();
 			execvp(argv[1], argv+1);
 			exit(123);
 		}
 
 		ptrace_attach_child(pid);
 	}
-
-	/* TODO: check for ptrace errors */
 
 	/* TODO: separate /proc/net/udp,tcp garbage collector
 	  1. update struct port.last fields
@@ -163,11 +166,11 @@ int main(int argc, char *argv[])
 	/*************/
 
 	/* continue the parent process until syscall */
-	/* TODO: better ptrace.c API, integration and error checking */
-	ptrace(PTRACE_SYSCALL, td->pid, NULL, NULL);
+	ptrace_cont_syscall(td->pid);
 
 	while (1) {
 		/* wait for syscall from any pid */
+		/* TODO: process may stop not only due to PTRACE_SYSCALL - check it */
 		stopped_pid = waitpid(-1, &status, __WALL);
 
 		if (stopped_pid <= 0) {
@@ -179,22 +182,16 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		/* TODO: may stop here not only due to PTRACE_SYSCALL - check it */
-//		if (stopped_pid <= 0 || (WIFEXITED(status) && stopped_pid == pid))
-
-		/* get process registers */
-		ptrace(PTRACE_GETREGS, stopped_pid, NULL, &regs);
-
-		/* skip syscalls other than socketcall */
-		if (regs.orig_eax != SYS_socketcall) {
+		/* get regs, skip syscalls other than socketcall */
+		ptrace_getregs(stopped_pid, &regs);
+		if (regs.orig_eax != SYS_socketcall)
 			goto next_syscall;
-		}
+
+		/* fetch pid info */
+		sp = td_get_pid(td, stopped_pid);
 
 		/* filter anything different than bind(), connect() and sendto() */
-		sp = td_get_pid(td, stopped_pid);
 		sp->code = regs.ebx;
-
-		/* filter by socketcall code */
 		switch (sp->code) {
 			case SYS_BIND:
 			case SYS_CONNECT:
@@ -225,8 +222,7 @@ int main(int argc, char *argv[])
 		}
 
 next_syscall:
-		/* continue until next syscall entry/exit */
-		ptrace(PTRACE_SYSCALL, stopped_pid, NULL, NULL);
+		ptrace_cont_syscall(stopped_pid);
 	}
 
 	/*****************************/

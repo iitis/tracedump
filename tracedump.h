@@ -12,6 +12,10 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
+#include "inject.h"
+#include "ptrace.h"
+#include "utils.h"
+
 /* TODO: think about a speed-up for multiple sendto() calls from same {pid,fd} pairs */
 
 struct tracedump;
@@ -41,6 +45,7 @@ struct pid {
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
 	int code;                             /**< socketcall code */
 	int fd;                               /**< first argument - if in bind(), sendto() or connect() */
+	struct sock *ss;                      /**< cache */
 };
 
 /** Represents a socket */
