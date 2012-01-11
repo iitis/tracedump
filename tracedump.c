@@ -17,14 +17,14 @@
 #include <sys/wait.h>
 
 #include "tracedump.h"
-#include "inject.h"
-#include "ptrace.h"
 
 struct pid *td_get_pid(struct tracedump *td, pid_t pid)
 {
 	struct pid *sp;
 
-	/* TODO: speed-up with some cache? */
+	/* speed-up cache */
+	if (td->sp && td->sp->pid == pid)
+		return td->sp;
 
 	sp = thash_uint_get(td->pids, pid);
 	if (!sp) {
@@ -49,6 +49,8 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 	char buf[128], buf2[128];
 	int len, socknum;
 	struct sock *ss;
+	struct sockaddr_in sa;
+	socklen_t optlen;
 
 	/* TODO: speed-up cache? */
 
@@ -72,21 +74,51 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 	if (!ss) {
 		ss = mmatic_zalloc(td->mm, sizeof *ss);
 		ss->socknum = socknum;
+		thash_uint_set(td->socks, socknum, ss);
 
-		/* TODO: new socket */
-		printf("                TODO ==> new socket %d <== TODO\n", ss->socknum);
+		/* exit the original socketcall */
+		if (sp->in_socketcall) {
+			inject_escape_socketcall(td, sp->pid);
+		}
+
+		 /* TODO: handle bind() */
+
+		/* check AF_INET, get local address */
+		if (inject_getsockname_in(td, sp->pid, fd, &sa) != 0)
+			goto handled;
+
+		/* check TCP/UDP */
+		optlen = sizeof ss->type;
+		if (inject_getsockopt(td, sp->pid, fd, SOL_SOCKET, SO_TYPE, &ss->type, &optlen) != 0)
+			goto handled;
+		if (optlen != sizeof ss->type || (ss->type != SOCK_STREAM && ss->type != SOCK_DGRAM))
+			goto handled;
+
+		/* autobind if necessary */
+		if (!sa.sin_port) {
+			if (inject_autobind(td, sp->pid, fd) != 0) {
+				dbg(1, "pid %d fd %d: autobind failed\n", sp->pid, fd);
+				goto handled;
+			}
+
+			if (inject_getsockname_in(td, sp->pid, fd, &sa) != 0) {
+				dbg(1, "pid %d fd %d: getsockname after autobind failed\n", sp->pid, fd);
+				goto handled;
+			}
+		}
+
+		printf("port %s %d\n", ss->type == SOCK_STREAM ? "TCP" : "UDP", ntohs(sa.sin_port));
 
 		/* TODO:
-		 * ! Remember that sp is stopped and is entering a socketcall !
-		 *
-		 * - check if AF_INET and SOCK_STREAM or SOCK_DGRAM
-		 * - check portnum - addr from bind() or from an additional getsockname()
-		 * - if its 0, than do autobind() + getsockname() once again
-		 *
 		 * - add portnum to BPF
 		 */
 
-		thash_uint_set(td->socks, socknum, ss);
+handled:
+		/* finish the original socketcall */
+		if (sp->in_socketcall) {
+			inject_restore_socketcall(td, sp->pid);
+			sp->in_socketcall = false;
+		}
 	}
 
 	sp->ss = ss;
@@ -154,7 +186,6 @@ int main(int argc, char *argv[])
 	mm = mmatic_create();
 	td = mmatic_alloc(mm, sizeof *td);
 	td->mm = mm;
-
 	td->pid = pid;
 
 	/* create hashing tables */
@@ -166,7 +197,7 @@ int main(int argc, char *argv[])
 	/*************/
 
 	/* continue the parent process until syscall */
-	ptrace_cont_syscall(td->pid);
+	ptrace_cont_syscall(td->pid, false);
 
 	while (1) {
 		/* wait for syscall from any pid */
@@ -201,16 +232,10 @@ int main(int argc, char *argv[])
 				goto next_syscall;
 		}
 
-		/* inspect the process */
-		if (sp->in_socketcall) {
-			/* process has left a socketcall */
-			sp->in_socketcall = false;
+		sp->in_socketcall = !sp->in_socketcall;
 
-			/* TODO: check return code: regs.eax */
-		} else {
-			/* process has entered a socketcall */
-			sp->in_socketcall = true;
-
+		if ((sp->in_socketcall == false && sp->code == SYS_BIND && regs.eax == 0) ||
+		    (sp->in_socketcall == true  && sp->code != SYS_BIND)) {
 			/* get fd number */
 			ptrace_read(stopped_pid, regs.ecx, &fd_arg, 4);
 			sp->fd = fd_arg;
@@ -222,7 +247,7 @@ int main(int argc, char *argv[])
 		}
 
 next_syscall:
-		ptrace_cont_syscall(stopped_pid);
+		ptrace_cont_syscall(stopped_pid, false);
 	}
 
 	/*****************************/

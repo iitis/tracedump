@@ -53,21 +53,18 @@ void ptrace_traceme(void)
 	ptrace(PTRACE_TRACEME, 0, NULL, NULL);
 }
 
-void ptrace_cont(int pid)
+void ptrace_cont(int pid, bool w8)
 {
-	int s;
-
 	ptrace(PTRACE_CONT, pid, NULL, NULL);
-
-	do {
-	//	waitpid(pid, &s, WNOHANG);
-		waitpid(pid, &s, 0);
-	} while (!WIFSTOPPED(s));
+	if (w8)
+		waitpid(pid, NULL, 0);
 }
 
-void ptrace_cont_syscall(int pid)
+void ptrace_cont_syscall(int pid, bool w8)
 {
 	ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
+	if (w8)
+		waitpid(pid, NULL, 0);
 }
 
 void ptrace_detach(int pid)

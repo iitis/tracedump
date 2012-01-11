@@ -6,115 +6,172 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <linux/net.h>
 #include <netinet/in.h>
+#include <stdarg.h>
 
 #include "tracedump.h"
 
-struct inject *inject_init(void)
+int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...)
 {
-	struct inject *si;
-	int i = 0;
-	char *ptr;
-
-	/* GCC trick */
-	if (i == 0) goto code_end;
-
-code_start:
-asm(
-	"jmp data\n\t"
-
-"run_bind:\n\t"
-	/* load data */
-	"popl   %ecx\n\t"
-	"movl   (%ecx), %ebx\n\t"
-	"addl   $4, %ecx\n\t"
-
-	/* run socketcall(2) and go back */
-	"movl   $102, %eax\n\t"
-	"int    $0x80\n\t"
-	"int3\n\t"
-
-"data: call run_bind\n\t"
-	/* socketcall subcode */
-	".long 0x12345678\n\t"
-
-	/* socketcall arguments: fd, *addr, addrlen */
-	".long 0x00000000\n\t"  /* fd = 0 */
-	".long 0x00000000\n\t"  /* *addr = NULL */
-	".long 0x00000010\n\t"  /* addrlen = 16 */
-
-	/* struct sockaddr addr */
-	".long 0x0002\n\t"      /* .sin_family = AF_INET */
-	".long 0x0000\n\t"      /* .sin_port = 0 */
-	".long 0x00000000\n\t"  /* .sin_addr = 0.0.0.0 */
-	".long 0x00000000\n\t"  /* .sin_zero */
-	".long 0x00000000\n\t"  /* .sin_zero */
-);
-code_end: if (0); /* GCC trick */
-
-	/* initialize struct inject */
-	si = ut_malloc(sizeof(struct inject));
-
-	/* get lengths */
-	si->len = &&code_end - &&code_start;
-	si->len4 = si->len + (si->len%4 ? (4 - si->len%4) : 0);
-
-	/* copy the code */
-	si->code = ut_malloc(si->len4);
-	memcpy(si->code, &&code_start, si->len);
-
-	/* find args location */
-	for (ptr = si->code + si->len - 4; ptr > si->code; ptr--)
-		if (*((uint32_t *) ptr) == 0x12345678)
-			break;
-
-	/* save offsets and pointers */
-	si->data_offset = (ptr - si->code);
-	si->addr_offset = si->data_offset + 16;
-	si->data = (uint32_t *) (si->code + si->data_offset);
-	si->addr = (struct sockaddr_in *) (si->code + si->addr_offset);
-
-	return si;
-}
-
-void inject_free(struct inject *si)
-{
-	free(si->code);
-	free(si);
-}
-
-/* TODO: implement "output" */
-int32_t _inject_socketcall(struct inject *si, uint32_t sc_code, bool output, pid_t pid,
-	int fd, struct sockaddr_in *sa)
-{
-	char *backup;
+	/* int 0x80, int3 */
+	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
+	char backup[4];
 	struct user_regs_struct regs, regs2;
+	int ss_vals, ss_mem, ss;
+	va_list vl;
+	enum arg_type type;
+	uint32_t sv;
+	void *ptr;
+	uint8_t *stack, *stack_mem;
+	uint32_t *stack32;
+	int i, j;
 
-	backup = ut_malloc(si->len4);
+	/*
+	 * get the required amount of stack space
+	 */
+	ss_vals = 0;
+	ss_mem = 0;
+	va_start(vl, sc_code);
+	do {
+		type = va_arg(vl, enum arg_type);
+		if (type == AT_LAST) break;
+		sv  = va_arg(vl, uint32_t);
 
-	/* make backup */
+		/* each socketcall argument takes 4 bytes */
+		ss_vals += 4;
+
+		/* if its memory, it takes additional sv bytes */
+		if (type == AT_MEM_IN || type == AT_MEM_INOUT) {
+			ss_mem += sv;
+			ptr = va_arg(vl, void *);
+		}
+	} while (true);
+	va_end(vl);
+	ss = ss_vals + ss_mem;
+
+	/*
+	 * backup
+	 */
 	ptrace_getregs(pid, &regs);
-	ptrace_read(pid, regs.eip, backup, si->len4);
+	memcpy(&regs2, &regs, sizeof regs);
+	ptrace_read(pid, regs.eip, backup, sizeof backup);
 
-	/* configure the code */
-	si->data[0] = sc_code;
-	si->data[1] = fd;
-	si->data[2] = regs.eip + si->addr_offset;
+	/*
+	 * write the stack
+	 */
+	stack = mmatic_zalloc(td->mm, ss);
+	stack32 = (uint32_t *) stack;
+	stack_mem = stack + ss_vals;
 
-	/* inject the code and run it */
-	ptrace_write(pid, regs.eip, si->code, si->len4);
-	ptrace_cont(pid);
+	va_start(vl, sc_code);
+	i = 0; j = 0;
+	do {
+		type = va_arg(vl, enum arg_type);
+		if (type == AT_LAST) break;
 
-	/* read return code */
+		sv  = va_arg(vl, uint32_t);
+
+		if (type == AT_VALUE) {
+			stack32[i++] = sv;
+		} else { /* i.e. its a memory arg */
+			stack32[i++] = regs.esp - ss_mem + j;
+
+			/* copy the memory */
+			ptr = va_arg(vl, void *);
+			memcpy(stack_mem + j, ptr, sv);
+			j += sv;
+		}
+	} while (true);
+	va_end(vl);
+
+	ptrace_write(pid, regs.esp - ss, stack, ss);
+
+	/*
+	 * write the code and run
+	 */
+	regs2.eax = 102; // socketcall
+	regs2.ebx = sc_code;
+	regs2.ecx = regs.esp - ss;
+
+	ptrace_write(pid, regs.eip, code, sizeof code);
+	ptrace_setregs(pid, &regs2);
+	ptrace_cont(pid, true);
+
+	/*
+	 * read back
+	 */
 	ptrace_getregs(pid, &regs2);
+	ptrace_read(pid, regs.esp - ss_mem, stack_mem, ss_mem);
 
-	/* restore the original state */
-	ptrace_write(pid, regs.eip, backup, si->len4);
+	va_start(vl, sc_code);
+	do {
+		type = va_arg(vl, enum arg_type);
+		if (type == AT_LAST) break;
+
+		sv = va_arg(vl, uint32_t);
+		if (type == AT_VALUE) continue;
+
+		ptr = va_arg(vl, void *);
+		if (type == AT_MEM_IN) continue;
+
+		memcpy(ptr, stack_mem, sv);
+		stack_mem += sv;
+	} while (true);
+	va_end(vl);
+
+	mmatic_free(stack);
+
+	/* restore */
+	ptrace_write(pid, regs.eip, backup, sizeof backup);
 	ptrace_setregs(pid, &regs);
 
-	free(backup);
 	return regs2.eax;
+}
+
+void inject_escape_socketcall(struct tracedump *td, pid_t pid)
+{
+	struct user_regs_struct regs;
+	uint32_t orig_ebx;
+
+	/* update the registers */
+	ptrace_getregs(pid, &regs);
+	orig_ebx = regs.ebx;
+	regs.ebx = 0;
+	ptrace_setregs(pid, &regs);
+
+	/* run the invalid socketcall and wait */
+	ptrace_cont_syscall(pid, true);
+
+	/* restore */
+	regs.eax = regs.orig_eax;
+	regs.ebx = orig_ebx;
+	ptrace_setregs(pid, &regs);
+
+	/* now the process is in user mode */
+}
+
+void inject_restore_socketcall(struct tracedump *td, pid_t pid)
+{
+	/* int 0x80, int3 */
+	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
+	char backup[4];
+	struct user_regs_struct regs, regs2;
+
+	/* backup */
+	ptrace_getregs(pid, &regs);
+	ptrace_read(pid, regs.eip, backup, 4);
+
+	/* exec */
+	ptrace_write(pid, regs.eip, code, 4);
+	ptrace_cont(pid, true);
+
+	/* copy the return code */
+	ptrace_getregs(pid, &regs2);
+	regs.eax = regs2.eax;
+
+	/* restore */
+	ptrace_write(pid, regs.eip, backup, 4);
+	ptrace_setregs(pid, &regs);
 }

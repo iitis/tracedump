@@ -12,21 +12,21 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#include "inject.h"
-#include "ptrace.h"
-#include "utils.h"
-
-/* TODO: think about a speed-up for multiple sendto() calls from same {pid,fd} pairs */
-
 struct tracedump;
 struct pid;
 struct sock;
 struct port;
 
+#include "inject.h"
+#include "ptrace.h"
+#include "utils.h"
+
 /** Holds global program information */
 struct tracedump {
 	mmatic *mm;                           /**< global memory */
-	pid_t pid;                            /**< parent pid */
+
+	pid_t pid;                            /**< monitored pid (root) */
+	struct pid *sp;                       /**< pid cache */
 
 	/* structures for ptrace */
 	thash *pids;                          /**< traced PIDs: (int pid)->(struct pid) */
@@ -38,7 +38,6 @@ struct tracedump {
 };
 
 /** Represents a process */
-// int td_getsocknum(struct tracedump *td, int pid, int fd) -> readlink(/proc/<pid>/fd/<fd>
 struct pid {
 	int pid;                              /**< process ID */
 
@@ -55,9 +54,7 @@ struct pid {
  * port: getsockname()->ntohs(sin_port) */
 struct sock {
 	int socknum;                          /**< socket number */
-
-	int domain;                           /**< socket domain, eg. AF_INET */
-	int type;                             /**< socket type, e.g SOCK_STREAM or SOCK_DGRAM */
+	int type;                             /**< socket type, ie. SOCK_STREAM or SOCK_DGRAM */
 	uint16_t portnum;                     /**< if TCP or UDP: local port number */
 };
 

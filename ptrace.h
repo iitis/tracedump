@@ -20,19 +20,21 @@ void ptrace_attach_child(int pid);
 /** Mark this proccess as waiting for ptrace */
 void ptrace_traceme(void);
 
-/** Continue execution */
-void ptrace_cont(int pid);
+/** Continue execution until INT3 */
+void ptrace_cont(int pid, bool wait);
 
 /** Continue until syscall */
-void ptrace_cont_syscall(int pid);
+void ptrace_cont_syscall(int pid, bool wait);
 
 /** Detach from process pid */
 void ptrace_detach(int pid);
 
-/** Read data from location addr */
+/** Read data from location addr
+ * @len length in bytes */
 void ptrace_read(int pid, unsigned long addr, void *vptr, int len);
 
-/** Write data to location addr */
+/** Write data to location addr
+ * @len length in bytes */
 void ptrace_write(int pid, unsigned long addr, void *vptr, int len);
 
 /** Get process registers */
