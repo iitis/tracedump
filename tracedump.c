@@ -31,7 +31,6 @@ struct pid *td_get_pid(struct tracedump *td, pid_t pid)
 		dbg(3, "new pid %d\n", pid);
 		sp = mmatic_zalloc(td->mm, sizeof *sp);
 		sp->pid = pid;
-
 		thash_uint_set(td->pids, pid, sp);
 	}
 
@@ -43,7 +42,6 @@ void td_del_pid(struct tracedump *td, pid_t pid)
 	thash_uint_set(td->pids, pid, NULL);
 }
 
-/* XXX: it is assumed that sp is entering a socketcall (ie. stopped due to PTRACE_SYSCALL) */
 struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 {
 	char buf[128], buf2[128];
@@ -58,7 +56,7 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 	len = readlink(buf, buf2, sizeof buf2);
 
 	/* is it a socket at all? */
-	if (strncmp(buf2, "socket:[", 8) != 0)
+	if (len < 10 || strncmp(buf2, "socket:[", 8) != 0)
 		return NULL;
 
 	/* get socknum */
@@ -76,18 +74,15 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 		ss->socknum = socknum;
 		thash_uint_set(td->socks, socknum, ss);
 
-		/* exit the original socketcall */
-		if (sp->in_socketcall) {
+		/* cancel the original socketcall */
+		if (sp->in_socketcall)
 			inject_escape_socketcall(td, sp->pid);
-		}
 
-		 /* TODO: handle bind() */
-
-		/* check AF_INET, get local address */
+		/* check if AF_INET, get local address */
 		if (inject_getsockname_in(td, sp->pid, fd, &sa) != 0)
 			goto handled;
 
-		/* check TCP/UDP */
+		/* check if TCP/UDP */
 		optlen = sizeof ss->type;
 		if (inject_getsockopt(td, sp->pid, fd, SOL_SOCKET, SO_TYPE, &ss->type, &optlen) != 0)
 			goto handled;
@@ -95,7 +90,8 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 			goto handled;
 
 		/* autobind if necessary */
-		if (!sa.sin_port) {
+		/* FIXME: skype and firefox do not work with TCP autobind on connect() */
+		if (ss->type == SOCK_DGRAM && !sa.sin_port) {
 			if (inject_autobind(td, sp->pid, fd) != 0) {
 				dbg(1, "pid %d fd %d: autobind failed\n", sp->pid, fd);
 				goto handled;
@@ -105,13 +101,15 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 				dbg(1, "pid %d fd %d: getsockname after autobind failed\n", sp->pid, fd);
 				goto handled;
 			}
+
+			dbg(1, "pid %d fd %d: autobound\n", sp->pid, fd);
 		}
 
-		printf("port %s %d\n", ss->type == SOCK_STREAM ? "TCP" : "UDP", ntohs(sa.sin_port));
+		ss->port = ntohs(sa.sin_port);
 
-		/* TODO:
-		 * - add portnum to BPF
-		 */
+		/* TODO: add portnum to BPF */
+		printf("SC %d: port %s %d\n", sp->code,
+			ss->type == SOCK_STREAM ? "TCP" : "UDP", ss->port);
 
 handled:
 		/* finish the original socketcall */
@@ -152,9 +150,6 @@ int main(int argc, char *argv[])
 		/* attach to process */
 		pid = atoi(argv[1]);
 		ptrace_attach_pid(pid);
-
-		/* TODO: iterate through all the children from procfs and attach */
-
 	} else {
 		/* attach to child */
 		pid = fork();
@@ -184,7 +179,7 @@ int main(int argc, char *argv[])
 
 	/* initialize */
 	mm = mmatic_create();
-	td = mmatic_alloc(mm, sizeof *td);
+	td = mmatic_zalloc(mm, sizeof *td);
 	td->mm = mm;
 	td->pid = pid;
 
@@ -196,19 +191,14 @@ int main(int argc, char *argv[])
 
 	/*************/
 
-	/* continue the parent process until syscall */
-	ptrace_cont_syscall(td->pid, false);
-
 	while (1) {
 		/* wait for syscall from any pid */
-		/* TODO: process may stop not only due to PTRACE_SYSCALL - check it */
-		stopped_pid = waitpid(-1, &status, __WALL);
+		stopped_pid = ptrace_wait(-1, &status);
 
 		if (stopped_pid <= 0) {
 			dbg(1, "No more children\n");
 			break;
-		} else if (WIFEXITED(status)) {
-			dbg(1, "PID %d exited with %d\n", stopped_pid, WEXITSTATUS(status));
+		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			td_del_pid(td, stopped_pid);
 			continue;
 		}
@@ -218,10 +208,9 @@ int main(int argc, char *argv[])
 		if (regs.orig_eax != SYS_socketcall)
 			goto next_syscall;
 
-		/* fetch pid info */
+		/* fetch pid info,
+		 * filter anything different than bind(), connect() and sendto() */
 		sp = td_get_pid(td, stopped_pid);
-
-		/* filter anything different than bind(), connect() and sendto() */
 		sp->code = regs.ebx;
 		switch (sp->code) {
 			case SYS_BIND:
@@ -234,14 +223,14 @@ int main(int argc, char *argv[])
 
 		sp->in_socketcall = !sp->in_socketcall;
 
+		/* on exit from a successful bind() or enter to connect()/sendto() */
 		if ((sp->in_socketcall == false && sp->code == SYS_BIND && regs.eax == 0) ||
 		    (sp->in_socketcall == true  && sp->code != SYS_BIND)) {
 			/* get fd number */
 			ptrace_read(stopped_pid, regs.ecx, &fd_arg, 4);
-			sp->fd = fd_arg;
 
-			/* get underlying socket */
-			ss = td_get_sock(td, sp, sp->fd);
+			/* get the underlying socket and start monitoring if its new */
+			ss = td_get_sock(td, sp, fd_arg);
 
 			/* at this moment the socket has been handled */
 		}
@@ -251,9 +240,6 @@ next_syscall:
 	}
 
 	/*****************************/
-
-	/* TODO: detach only if Ctrl+C etc. */
-	//ptrace_detach(pid);
 
 	mmatic_destroy(mm);
 

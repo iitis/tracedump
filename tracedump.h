@@ -43,19 +43,14 @@ struct pid {
 
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
 	int code;                             /**< socketcall code */
-	int fd;                               /**< first argument - if in bind(), sendto() or connect() */
 	struct sock *ss;                      /**< cache */
 };
 
 /** Represents a socket */
-/* td_new_socket(struct tracedump *td, struct pid *stopped_pid, int socknum);
- * domain: getsockname()->sa_family
- * type: getsockopt(s, SOL_SOCKET, SO_TYPE, &socktype, &optlen);
- * port: getsockname()->ntohs(sin_port) */
 struct sock {
 	int socknum;                          /**< socket number */
 	int type;                             /**< socket type, ie. SOCK_STREAM or SOCK_DGRAM */
-	uint16_t portnum;                     /**< if TCP or UDP: local port number */
+	uint16_t port;                        /**< if TCP or UDP: local port number */
 };
 
 /** Represents a monitored port */

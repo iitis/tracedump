@@ -121,11 +121,11 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	} while (true);
 	va_end(vl);
 
-	mmatic_free(stack);
-
 	/* restore */
 	ptrace_write(pid, regs.eip, backup, sizeof backup);
 	ptrace_setregs(pid, &regs);
+
+	mmatic_free(stack);
 
 	return regs2.eax;
 }

@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <string.h>
+#include <dirent.h>
 
 #include "tracedump.h"
 
@@ -37,15 +38,41 @@ static long _ptrace(enum __ptrace_request request, pid_t pid,
 
 void ptrace_attach_pid(int pid)
 {
-	ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-	ptrace_attach_child(pid);
+	DIR *dh;
+	char buf[128];
+	struct dirent *de;
+
+	snprintf(buf, sizeof buf, "/proc/%d/task", pid);
+	dh = opendir(buf);
+
+	if (dh) {
+		while ((de = readdir(dh))) {
+			if (!isdigit(de->d_name[0]))
+				continue;
+
+			pid = atoi(de->d_name);
+			if (pid <= 0)
+				continue;
+
+			ptrace(PTRACE_ATTACH, pid, NULL, NULL);
+			ptrace_attach_child(pid);
+		}
+
+		closedir(dh);
+	} else {
+		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
+		ptrace_attach_child(pid);
+	}
 }
 
 void ptrace_attach_child(int pid)
 {
-	waitpid(pid, NULL, WUNTRACED);
+	dbg(1, "attaching PID %d\n", pid);
+
+	waitpid(pid, NULL, __WALL);
 	ptrace(PTRACE_SETOPTIONS, pid, NULL,
 		PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
+	ptrace_cont_syscall(pid, false);
 }
 
 void ptrace_traceme(void)
@@ -53,28 +80,51 @@ void ptrace_traceme(void)
 	ptrace(PTRACE_TRACEME, 0, NULL, NULL);
 }
 
+int ptrace_wait(int pid, int *st)
+{
+	int rc, status;
+
+	rc = waitpid(pid, &status, __WALL);
+
+	if (rc == -1) {
+		dbg(1, "wait(%d): %s\n", pid, strerror(errno));
+		return rc;
+	}
+
+	if (pid == -1)
+		pid = rc;
+
+	if (WIFEXITED(status))
+		dbg(1, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
+	else if (WIFSIGNALED(status))
+		dbg(1, "wait(%d): process terminated with signal %d\n", pid, WTERMSIG(status));
+	else if (WIFSTOPPED(status) &&
+	         WSTOPSIG(status) != SIGSTOP &&
+	         WSTOPSIG(status) != SIGTRAP)
+		dbg(1, "wait(%d): process stopped with signal %d\n", pid, WSTOPSIG(status));
+
+	if (st)
+		*st = status;
+
+	return rc;
+}
+
 void ptrace_cont(int pid, bool w8)
 {
 	ptrace(PTRACE_CONT, pid, NULL, NULL);
-	if (w8)
-		waitpid(pid, NULL, 0);
+	if (w8) ptrace_wait(pid, NULL);
 }
 
 void ptrace_cont_syscall(int pid, bool w8)
 {
 	ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
-	if (w8)
-		waitpid(pid, NULL, 0);
+	if (w8) ptrace_wait(pid, NULL);
 }
 
 void ptrace_detach(int pid)
 {
-	ptrace(PTRACE_DETACH, pid , NULL , NULL);
+	ptrace(PTRACE_DETACH, pid, NULL, NULL);
 }
-
-/*************
- ************* FIXME: alignment etc. on x86-64 ?
- *************/
 
 void ptrace_read(int pid, unsigned long addr, void *vptr, int len)
 {
@@ -94,14 +144,13 @@ void ptrace_read(int pid, unsigned long addr, void *vptr, int len)
 void ptrace_write(int pid, unsigned long addr, void *vptr, int len)
 {
 	int i, count;
-	uint32_t word;
+	uint32_t *word;
 
+	word = (uint32_t *) vptr;
 	i = count = 0;
 
-	/* TODO: poketext without memcpy? */
 	while (count < len) {
-		memcpy(&word, vptr+count, sizeof(word));
-		word = ptrace(PTRACE_POKETEXT, pid, addr + count, word);
+		ptrace(PTRACE_POKETEXT, pid, addr + count, *word++);
 		count +=4;
 	}
 }

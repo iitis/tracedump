@@ -20,6 +20,9 @@ void ptrace_attach_child(int pid);
 /** Mark this proccess as waiting for ptrace */
 void ptrace_traceme(void);
 
+/** Wait for traced child - wrapper around waitpid() */
+int ptrace_wait(int pid, int *status);
+
 /** Continue execution until INT3 */
 void ptrace_cont(int pid, bool wait);
 
