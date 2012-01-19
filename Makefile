@@ -1,8 +1,8 @@
 CFLAGS = 
-LDFLAGS = -lpjf -lpcre
+LDFLAGS = -lpjf -lpcre -lpthread
 
 ME=tracedump
-C_OBJECTS=ptrace.o inject.o tracedump.o
+C_OBJECTS=ptrace.o inject.o tracedump.o pcap.o
 TARGETS=tracedump
 
 include rules.mk

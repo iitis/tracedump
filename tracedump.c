@@ -18,6 +18,35 @@
 
 #include "tracedump.h"
 
+void td_add_port(struct tracedump *td, struct sock *ss, bool local)
+{
+	struct port *sp;
+	thash *ports;
+
+	if (ss->type == SOCK_DGRAM)
+		ports = td->udp_ports;
+	else if (ss->type == SOCK_STREAM)
+		ports = td->tcp_ports;
+	else
+		die("invalid ss->type\n");
+
+	sp = thash_uint_get(ports, ss->port);
+	if (!sp) {
+		sp = mmatic_zalloc(td->mm, sizeof *sp);
+		thash_uint_set(ports, ss->port, sp);
+	} else {
+		dbg(1, "port %d/%s already exists\n", ss->port,
+			ss->type == SOCK_STREAM ? "TCP" : "UDP");
+	}
+
+	gettimeofday(&sp->last, NULL);
+	sp->local = local;
+	sp->socknum = ss->socknum;
+
+	dbg(3, "port %d/%s added\n", ss->port,
+		ss->type == SOCK_STREAM ? "TCP" : "UDP");
+}
+
 struct pid *td_get_pid(struct tracedump *td, pid_t pid)
 {
 	struct pid *sp;
@@ -92,6 +121,7 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 		/* autobind if necessary */
 		/* FIXME: skype and firefox do not work with TCP autobind on connect() */
 		if (ss->type == SOCK_DGRAM && !sa.sin_port) {
+//		if (!sa.sin_port) {
 			if (inject_autobind(td, sp->pid, fd) != 0) {
 				dbg(1, "pid %d fd %d: autobind failed\n", sp->pid, fd);
 				goto handled;
@@ -107,9 +137,10 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 
 		ss->port = ntohs(sa.sin_port);
 
-		/* TODO: add portnum to BPF */
-		printf("SC %d: port %s %d\n", sp->code,
-			ss->type == SOCK_STREAM ? "TCP" : "UDP", ss->port);
+dbg(1, "SC %d: port %s %d\n", sp->code, ss->type == SOCK_STREAM ? "TCP" : "UDP", ss->port);
+
+		td_add_port(td, ss, true);
+		pc_update(td);
 
 handled:
 		/* finish the original socketcall */
@@ -167,14 +198,6 @@ int main(int argc, char *argv[])
 	  1. update struct port.last fields
 	  2. iterate through td->tcp/udp_ports and delete those with old port.last fields */
 
-	/* TODO: separate PCAP reader thread
-	 * on BPF filter update:
-	 * 1. cork the socket
-	 * 2. read all remaining packets
-	 * 3. update the filter
-	 * 4. uncork the socket
-	 */
-
 	/*************/
 
 	/* initialize */
@@ -189,17 +212,24 @@ int main(int argc, char *argv[])
 	td->tcp_ports = thash_create_intkey(mmatic_free, td->mm);
 	td->udp_ports = thash_create_intkey(mmatic_free, td->mm);
 
+	/* pcap */
+	pc_init(td);
+
 	/*************/
 
 	while (1) {
 		/* wait for syscall from any pid */
 		stopped_pid = ptrace_wait(-1, &status);
 
-		if (stopped_pid <= 0) {
+		if (stopped_pid == -1) {
 			dbg(1, "No more children\n");
 			break;
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			td_del_pid(td, stopped_pid);
+			continue;
+		} else if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGSEGV) {
+			dbg(1, "sending SIGKILL to pid %d\n", stopped_pid);
+			kill(stopped_pid, SIGKILL);
 			continue;
 		}
 
@@ -241,6 +271,7 @@ next_syscall:
 
 	/*****************************/
 
+	pc_deinit(td);
 	mmatic_destroy(mm);
 
 	return 0;

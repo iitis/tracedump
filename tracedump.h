@@ -20,6 +20,7 @@ struct port;
 #include "inject.h"
 #include "ptrace.h"
 #include "utils.h"
+#include "pcap.h"
 
 /** Holds global program information */
 struct tracedump {
@@ -35,6 +36,8 @@ struct tracedump {
 	/* structures for /proc/net/{tcp,udp} garbage collector */
 	thash *tcp_ports;                     /**< monitored TCP ports: (int port)->(struct port) */
 	thash *udp_ports;                     /**< monitored UDP ports: (int port)->(struct port) */
+
+	struct pcap *pc;                      /**< PCAP data */
 };
 
 /** Represents a process */
@@ -44,19 +47,21 @@ struct pid {
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
 	int code;                             /**< socketcall code */
 	struct sock *ss;                      /**< cache */
+
+	struct user_regs_struct regs;         /**< regs backup */
 };
 
 /** Represents a socket */
 struct sock {
 	int socknum;                          /**< socket number */
 	int type;                             /**< socket type, ie. SOCK_STREAM or SOCK_DGRAM */
-	uint16_t port;                        /**< if TCP or UDP: local port number */
+	unsigned long port;                   /**< if TCP or UDP: port number */
 };
 
 /** Represents a monitored port */
 struct port {
-	struct timeval since;                 /**< time when it was inserted into the BPF filter */
 	struct timeval last;                  /**< time when it was last seen in relevant procfs socket list */
+	bool local;                           /**< local port if true, remote port otherwise */
 	int socknum;                          /**< socknum seen on last procfs read */
 };
 

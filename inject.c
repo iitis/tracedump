@@ -130,6 +130,7 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	return regs2.eax;
 }
 
+/* TODO: check the ~/tmp version */
 void inject_escape_socketcall(struct tracedump *td, pid_t pid)
 {
 	struct user_regs_struct regs;
