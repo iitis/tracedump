@@ -18,7 +18,7 @@
 
 #include "tracedump.h"
 
-void td_add_port(struct tracedump *td, struct sock *ss, bool local)
+static void td_add_port(struct tracedump *td, struct sock *ss, bool local)
 {
 	struct port *sp;
 	thash *ports;
@@ -47,7 +47,7 @@ void td_add_port(struct tracedump *td, struct sock *ss, bool local)
 		ss->type == SOCK_STREAM ? "TCP" : "UDP");
 }
 
-struct pid *td_get_pid(struct tracedump *td, pid_t pid)
+static struct pid *td_get_pid(struct tracedump *td, pid_t pid)
 {
 	struct pid *sp;
 
@@ -66,12 +66,12 @@ struct pid *td_get_pid(struct tracedump *td, pid_t pid)
 	return sp;
 }
 
-void td_del_pid(struct tracedump *td, pid_t pid)
+static void td_del_pid(struct tracedump *td, pid_t pid)
 {
 	thash_uint_set(td->pids, pid, NULL);
 }
 
-struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
+static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 {
 	char buf[128], buf2[128];
 	int len, socknum;
@@ -105,27 +105,27 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 
 		/* cancel the original socketcall */
 		if (sp->in_socketcall)
-			inject_escape_socketcall(td, sp->pid);
+			inject_escape_socketcall(td, sp);
 
 		/* check if AF_INET, get local address */
-		if (inject_getsockname_in(td, sp->pid, fd, &sa) != 0)
+		if (inject_getsockname_in(td, sp, fd, &sa) != 0)
 			goto handled;
 
 		/* check if TCP/UDP */
 		optlen = sizeof ss->type;
-		if (inject_getsockopt(td, sp->pid, fd, SOL_SOCKET, SO_TYPE, &ss->type, &optlen) != 0)
+		if (inject_getsockopt(td, sp, fd, SOL_SOCKET, SO_TYPE, &ss->type, &optlen) != 0)
 			goto handled;
 		if (optlen != sizeof ss->type || (ss->type != SOCK_STREAM && ss->type != SOCK_DGRAM))
 			goto handled;
 
 		/* autobind if necessary */
 		if (!sa.sin_port) {
-			if (inject_autobind(td, sp->pid, fd) != 0) {
+			if (inject_autobind(td, sp, fd) != 0) {
 				dbg(1, "pid %d fd %d: autobind failed\n", sp->pid, fd);
 				goto handled;
 			}
 
-			if (inject_getsockname_in(td, sp->pid, fd, &sa) != 0) {
+			if (inject_getsockname_in(td, sp, fd, &sa) != 0) {
 				dbg(1, "pid %d fd %d: getsockname after autobind failed\n", sp->pid, fd);
 				goto handled;
 			}
@@ -139,7 +139,7 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 handled:
 		/* finish the original socketcall */
 		if (sp->in_socketcall) {
-			inject_restore_socketcall(td, sp->pid);
+			inject_restore_socketcall(td, sp);
 			sp->in_socketcall = false;
 		}
 	}

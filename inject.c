@@ -13,7 +13,7 @@
 
 #include "tracedump.h"
 
-int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...)
+int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code, ...)
 {
 	/* int 0x80, int3 */
 	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
@@ -54,9 +54,9 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	/*
 	 * backup
 	 */
-	ptrace_getregs(pid, &regs);
+	ptrace_getregs(sp->pid, &regs);
 	memcpy(&regs2, &regs, sizeof regs);
-	ptrace_read(pid, regs.eip, backup, sizeof backup);
+	ptrace_read(sp->pid, regs.eip, backup, sizeof backup);
 
 	/*
 	 * write the stack
@@ -86,7 +86,7 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	} while (true);
 	va_end(vl);
 
-	ptrace_write(pid, regs.esp - ss, stack, ss);
+	ptrace_write(sp->pid, regs.esp - ss, stack, ss);
 
 	/*
 	 * write the code and run
@@ -95,15 +95,15 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	regs2.ebx = sc_code;
 	regs2.ecx = regs.esp - ss;
 
-	ptrace_write(pid, regs.eip, code, sizeof code);
-	ptrace_setregs(pid, &regs2);
-	ptrace_cont(pid, 0, true);
+	ptrace_write(sp->pid, regs.eip, code, sizeof code);
+	ptrace_setregs(sp->pid, &regs2);
+	ptrace_cont(sp->pid, 0, true);
 
 	/*
 	 * read back
 	 */
-	ptrace_getregs(pid, &regs2);
-	ptrace_read(pid, regs.esp - ss_mem, stack_mem, ss_mem);
+	ptrace_getregs(sp->pid, &regs2);
+	ptrace_read(sp->pid, regs.esp - ss_mem, stack_mem, ss_mem);
 
 	va_start(vl, sc_code);
 	do {
@@ -122,57 +122,53 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 	va_end(vl);
 
 	/* restore */
-	ptrace_write(pid, regs.eip, backup, sizeof backup);
-	ptrace_setregs(pid, &regs);
+	ptrace_write(sp->pid, regs.eip, backup, sizeof backup);
+	ptrace_setregs(sp->pid, &regs);
 
 	mmatic_free(stack);
 
 	return regs2.eax;
 }
 
-/* TODO: check the ~/tmp version */
-void inject_escape_socketcall(struct tracedump *td, pid_t pid)
+void inject_escape_socketcall(struct tracedump *td, struct pid *sp)
 {
 	struct user_regs_struct regs;
-	uint32_t orig_ebx;
 
-	/* update the registers */
-	ptrace_getregs(pid, &regs);
-	orig_ebx = regs.ebx;
+	/* make backup */
+	ptrace_getregs(sp->pid, &regs);
+	memcpy(&sp->regs, &regs, sizeof regs);
+
+	/* update EBX so it is invalid */
 	regs.ebx = 0;
-	ptrace_setregs(pid, &regs);
+	ptrace_setregs(sp->pid, &regs);
 
 	/* run the invalid socketcall and wait */
-	ptrace_cont_syscall(pid, 0, true);
+	ptrace_cont_syscall(sp->pid, 0, true);
 
-	/* restore */
-	regs.eax = regs.orig_eax;
-	regs.ebx = orig_ebx;
-	ptrace_setregs(pid, &regs);
-
-	/* now the process is in user mode */
+	/* -> now the process is in user mode */
 }
 
-void inject_restore_socketcall(struct tracedump *td, pid_t pid)
+void inject_restore_socketcall(struct tracedump *td, struct pid *sp)
 {
 	/* int 0x80, int3 */
 	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
 	char backup[4];
-	struct user_regs_struct regs, regs2;
+	struct user_regs_struct regs2;
 
 	/* backup */
-	ptrace_getregs(pid, &regs);
-	ptrace_read(pid, regs.eip, backup, 4);
+	ptrace_read(sp->pid, sp->regs.eip, backup, 4);
 
 	/* exec */
-	ptrace_write(pid, regs.eip, code, 4);
-	ptrace_cont(pid, 0, true);
+	sp->regs.eax = sp->regs.orig_eax;
+	ptrace_setregs(sp->pid, &sp->regs);
+	ptrace_write(sp->pid, sp->regs.eip, code, 4);
+	ptrace_cont(sp->pid, 0, true);
 
-	/* copy the return code */
-	ptrace_getregs(pid, &regs2);
-	regs.eax = regs2.eax;
+	/* read the return code */
+	ptrace_getregs(sp->pid, &regs2);
+	sp->regs.eax = regs2.eax;
 
 	/* restore */
-	ptrace_write(pid, regs.eip, backup, 4);
-	ptrace_setregs(pid, &regs);
+	ptrace_setregs(sp->pid, &sp->regs);
+	ptrace_write(sp->pid, sp->regs.eip, backup, 4);
 }

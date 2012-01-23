@@ -101,7 +101,7 @@ void *pc_thread(void *arg)
 {
 	struct tracedump *td;
 	int i, snaplen, inclen;
-	uint8_t pkt[2048];
+	uint8_t pkt[8192];
 	struct pcap_pkt_hdr pp;
 	struct pcap_sll_hdr ps;
 	struct timeval ts;
