@@ -11,6 +11,7 @@
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <string.h>
 #include <dirent.h>
 
@@ -72,7 +73,7 @@ void ptrace_attach_child(int pid)
 	waitpid(pid, NULL, __WALL);
 	ptrace(PTRACE_SETOPTIONS, pid, NULL,
 		PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
-	ptrace_cont_syscall(pid, false);
+	ptrace_cont_syscall(pid, 0, false);
 }
 
 void ptrace_traceme(void)
@@ -109,21 +110,36 @@ int ptrace_wait(int pid, int *st)
 	return rc;
 }
 
-void ptrace_cont(int pid, bool w8)
+static inline void _ptrace_cont(bool syscall, int pid, unsigned long sig, bool w8)
 {
-	ptrace(PTRACE_CONT, pid, NULL, NULL);
-	if (w8) ptrace_wait(pid, NULL);
+	int status;
+
+	while (1) {
+		ptrace(syscall ? PTRACE_SYSCALL : PTRACE_CONT, pid, NULL, (void *) sig);
+		if (!w8)
+			break;
+
+		ptrace_wait(pid, &status);
+		if (!WIFSTOPPED(status))
+			break;
+
+		sig = WSTOPSIG(status);
+		if (sig == SIGSTOP || sig == SIGTRAP)
+			break;
+	}
 }
 
-void ptrace_cont_syscall(int pid, bool w8)
-{
-	ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
-	if (w8) ptrace_wait(pid, NULL);
-}
+void ptrace_cont(int pid, unsigned long sig, bool w8) { _ptrace_cont(false, pid, sig, w8); }
+void ptrace_cont_syscall(int pid, unsigned long sig, bool w8) { _ptrace_cont(true, pid, sig, w8); }
 
 void ptrace_detach(int pid)
 {
 	ptrace(PTRACE_DETACH, pid, NULL, NULL);
+}
+
+void ptrace_kill(int pid)
+{
+	kill(pid, SIGKILL);
 }
 
 void ptrace_read(int pid, unsigned long addr, void *vptr, int len)

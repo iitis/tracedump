@@ -97,7 +97,7 @@ int32_t inject_socketcall(struct tracedump *td, pid_t pid, uint32_t sc_code, ...
 
 	ptrace_write(pid, regs.eip, code, sizeof code);
 	ptrace_setregs(pid, &regs2);
-	ptrace_cont(pid, true);
+	ptrace_cont(pid, 0, true);
 
 	/*
 	 * read back
@@ -143,7 +143,7 @@ void inject_escape_socketcall(struct tracedump *td, pid_t pid)
 	ptrace_setregs(pid, &regs);
 
 	/* run the invalid socketcall and wait */
-	ptrace_cont_syscall(pid, true);
+	ptrace_cont_syscall(pid, 0, true);
 
 	/* restore */
 	regs.eax = regs.orig_eax;
@@ -166,7 +166,7 @@ void inject_restore_socketcall(struct tracedump *td, pid_t pid)
 
 	/* exec */
 	ptrace_write(pid, regs.eip, code, 4);
-	ptrace_cont(pid, true);
+	ptrace_cont(pid, 0, true);
 
 	/* copy the return code */
 	ptrace_getregs(pid, &regs2);

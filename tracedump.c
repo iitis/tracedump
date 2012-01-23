@@ -10,11 +10,11 @@
 #include <stdint.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
-#include <linux/net.h>
-#include <libpjf/main.h>
-
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <linux/net.h>
+#include <libpjf/main.h>
 
 #include "tracedump.h"
 
@@ -119,9 +119,7 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 			goto handled;
 
 		/* autobind if necessary */
-		/* FIXME: skype and firefox do not work with TCP autobind on connect() */
-		if (ss->type == SOCK_DGRAM && !sa.sin_port) {
-//		if (!sa.sin_port) {
+		if (!sa.sin_port) {
 			if (inject_autobind(td, sp->pid, fd) != 0) {
 				dbg(1, "pid %d fd %d: autobind failed\n", sp->pid, fd);
 				goto handled;
@@ -131,13 +129,9 @@ struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 				dbg(1, "pid %d fd %d: getsockname after autobind failed\n", sp->pid, fd);
 				goto handled;
 			}
-
-			dbg(1, "pid %d fd %d: autobound\n", sp->pid, fd);
 		}
 
 		ss->port = ntohs(sa.sin_port);
-
-dbg(1, "SC %d: port %s %d\n", sp->code, ss->type == SOCK_STREAM ? "TCP" : "UDP", ss->port);
 
 		td_add_port(td, ss, true);
 		pc_update(td);
@@ -227,10 +221,12 @@ int main(int argc, char *argv[])
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			td_del_pid(td, stopped_pid);
 			continue;
-		} else if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGSEGV) {
-			dbg(1, "sending SIGKILL to pid %d\n", stopped_pid);
-			kill(stopped_pid, SIGKILL);
-			continue;
+		} else if (WIFSTOPPED(status)) {
+			if (WSTOPSIG(status) != SIGTRAP && WSTOPSIG(status) != SIGSTOP) {
+				/* pass the signal to child */
+				ptrace_cont_syscall(stopped_pid, WSTOPSIG(status), false);
+				continue;
+			}
 		}
 
 		/* get regs, skip syscalls other than socketcall */
@@ -266,7 +262,7 @@ int main(int argc, char *argv[])
 		}
 
 next_syscall:
-		ptrace_cont_syscall(stopped_pid, false);
+		ptrace_cont_syscall(stopped_pid, 0, false);
 	}
 
 	/*****************************/
