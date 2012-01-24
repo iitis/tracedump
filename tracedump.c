@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <linux/net.h>
 #include <libpjf/main.h>
+#include <setjmp.h>
 
 #include "tracedump.h"
 
@@ -45,30 +46,6 @@ static void td_add_port(struct tracedump *td, struct sock *ss, bool local)
 
 	dbg(3, "port %d/%s added\n", ss->port,
 		ss->type == SOCK_STREAM ? "TCP" : "UDP");
-}
-
-static struct pid *td_get_pid(struct tracedump *td, pid_t pid)
-{
-	struct pid *sp;
-
-	/* speed-up cache */
-	if (td->sp && td->sp->pid == pid)
-		return td->sp;
-
-	sp = thash_uint_get(td->pids, pid);
-	if (!sp) {
-		dbg(3, "new pid %d\n", pid);
-		sp = mmatic_zalloc(td->mm, sizeof *sp);
-		sp->pid = pid;
-		thash_uint_set(td->pids, pid, sp);
-	}
-
-	return sp;
-}
-
-static void td_del_pid(struct tracedump *td, pid_t pid)
-{
-	thash_uint_set(td->pids, pid, NULL);
 }
 
 static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
@@ -159,6 +136,7 @@ int main(int argc, char *argv[])
 	struct user_regs_struct regs;
 	int status;
 	int stopped_pid;
+	int i;
 
 	/*************/
 
@@ -171,10 +149,27 @@ int main(int argc, char *argv[])
 
 	/*************/
 
+	/* initialize */
+	mm = mmatic_create();
+	td = mmatic_zalloc(mm, sizeof *td);
+	td->mm = mm;
+
+	/* create hashing tables */
+	td->pids = thash_create_intkey(mmatic_free, td->mm);
+	td->socks = thash_create_intkey(mmatic_free, td->mm);
+	td->tcp_ports = thash_create_intkey(mmatic_free, td->mm);
+	td->udp_ports = thash_create_intkey(mmatic_free, td->mm);
+
+	/*************/
+
+	/* handle premature exceptions */
+	if ((i = setjmp(td->jmp)) != 0)
+		die("exception %d, arg %d\n", EXC_CODE(i), EXC_ARG(i));
+
 	if (isdigit(argv[1][0])) {
 		/* attach to process */
 		pid = atoi(argv[1]);
-		ptrace_attach_pid(pid);
+		ptrace_attach_pid(pid_get(td, pid));
 	} else {
 		/* attach to child */
 		pid = fork();
@@ -185,58 +180,62 @@ int main(int argc, char *argv[])
 			exit(123);
 		}
 
-		ptrace_attach_child(pid);
+		ptrace_attach_child(pid_get(td, pid));
 	}
+
+	/*************/
 
 	/* TODO: separate /proc/net/udp,tcp garbage collector
 	  1. update struct port.last fields
 	  2. iterate through td->tcp/udp_ports and delete those with old port.last fields */
 
-	/*************/
-
-	/* initialize */
-	mm = mmatic_create();
-	td = mmatic_zalloc(mm, sizeof *td);
-	td->mm = mm;
-	td->pid = pid;
-
-	/* create hashing tables */
-	td->pids = thash_create_intkey(mmatic_free, td->mm);
-	td->socks = thash_create_intkey(mmatic_free, td->mm);
-	td->tcp_ports = thash_create_intkey(mmatic_free, td->mm);
-	td->udp_ports = thash_create_intkey(mmatic_free, td->mm);
-
-	/* pcap */
+	/* start the pcap thread */
 	pc_init(td);
 
 	/*************/
 
+	/* handle exceptions */
+	if ((i = setjmp(td->jmp)) != 0) {
+		switch (EXC_CODE(i)) {
+			case EXC_PTRACE:
+				dbg(1, "ptrace error: pid %d\n", EXC_ARG(i));
+				break;
+			default:
+				dbg(1, "exception %d, arg %d\n", EXC_CODE(i), EXC_ARG(i));
+				break;
+		}
+	}
+
 	while (1) {
 		/* wait for syscall from any pid */
-		stopped_pid = ptrace_wait(-1, &status);
+		stopped_pid = ptrace_wait(NULL, &status);
 
 		if (stopped_pid == -1) {
 			dbg(1, "No more children\n");
 			break;
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
-			td_del_pid(td, stopped_pid);
+			pid_del(td, stopped_pid);
 			continue;
-		} else if (WIFSTOPPED(status)) {
+		}
+
+		/* fetch pid info */
+		sp = pid_get(td, stopped_pid);
+
+		/* handle signal passing */
+		if (WIFSTOPPED(status)) {
 			if (WSTOPSIG(status) != SIGTRAP && WSTOPSIG(status) != SIGSTOP) {
 				/* pass the signal to child */
-				ptrace_cont_syscall(stopped_pid, WSTOPSIG(status), false);
+				ptrace_cont_syscall(sp, WSTOPSIG(status), false);
 				continue;
 			}
 		}
 
 		/* get regs, skip syscalls other than socketcall */
-		ptrace_getregs(stopped_pid, &regs);
+		ptrace_getregs(sp, &regs);
 		if (regs.orig_eax != SYS_socketcall)
 			goto next_syscall;
 
-		/* fetch pid info,
-		 * filter anything different than bind(), connect() and sendto() */
-		sp = td_get_pid(td, stopped_pid);
+		/* filter anything different than bind(), connect() and sendto() */
 		sp->code = regs.ebx;
 		switch (sp->code) {
 			case SYS_BIND:
@@ -253,7 +252,7 @@ int main(int argc, char *argv[])
 		if ((sp->in_socketcall == false && sp->code == SYS_BIND && regs.eax == 0) ||
 		    (sp->in_socketcall == true  && sp->code != SYS_BIND)) {
 			/* get fd number */
-			ptrace_read(stopped_pid, regs.ecx, &fd_arg, 4);
+			ptrace_read(sp, regs.ecx, &fd_arg, 4);
 
 			/* get the underlying socket and start monitoring if its new */
 			ss = td_get_sock(td, sp, fd_arg);
@@ -262,7 +261,7 @@ int main(int argc, char *argv[])
 		}
 
 next_syscall:
-		ptrace_cont_syscall(stopped_pid, 0, false);
+		ptrace_cont_syscall(sp, 0, false);
 	}
 
 	/*****************************/

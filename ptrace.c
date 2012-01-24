@@ -17,11 +17,12 @@
 
 #include "tracedump.h"
 
-static long _ptrace(enum __ptrace_request request, pid_t pid,
+static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 	void *addr, void *data,
 	const char *func)
 {
 	long rc;
+	int pid = sp ? sp->pid : 0;
 
 	rc = ptrace(request, pid, addr, data);
 
@@ -30,20 +31,24 @@ static long _ptrace(enum __ptrace_request request, pid_t pid,
 		(errno != 0 || (
 			request != PTRACE_PEEKDATA &&
 			request != PTRACE_PEEKUSER
-	)))
-		die("%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
+	))) {
+		dbg(1, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
+		EXCEPTION(sp->td, EXC_PTRACE, pid);
+	}
 
 	return rc;
 }
-#define ptrace(a, b, c, d) _ptrace(a, b, ((void *) (c)), ((void *) (d)), __func__)
+#define run_ptrace(a, b, c, d) _run_ptrace(a, b, ((void *) (c)), ((void *) (d)), __func__)
 
-void ptrace_attach_pid(int pid)
+void ptrace_attach_pid(struct pid *sp)
 {
 	DIR *dh;
 	char buf[128];
 	struct dirent *de;
+	int pid;
+	struct pid *sp2;
 
-	snprintf(buf, sizeof buf, "/proc/%d/task", pid);
+	snprintf(buf, sizeof buf, "/proc/%d/task", sp->pid);
 	dh = opendir(buf);
 
 	if (dh) {
@@ -55,35 +60,37 @@ void ptrace_attach_pid(int pid)
 			if (pid <= 0)
 				continue;
 
-			ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-			ptrace_attach_child(pid);
+			sp2 = pid_get(sp->td, pid);
+			run_ptrace(PTRACE_ATTACH, sp2, NULL, NULL);
+			ptrace_attach_child(sp2);
 		}
 
 		closedir(dh);
 	} else {
-		ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-		ptrace_attach_child(pid);
+		run_ptrace(PTRACE_ATTACH, sp, NULL, NULL);
+		ptrace_attach_child(sp);
 	}
 }
 
-void ptrace_attach_child(int pid)
+void ptrace_attach_child(struct pid *sp)
 {
-	dbg(1, "attaching PID %d\n", pid);
+	dbg(1, "attaching PID %d\n", sp->pid);
 
-	waitpid(pid, NULL, __WALL);
-	ptrace(PTRACE_SETOPTIONS, pid, NULL,
+	ptrace_wait(sp, NULL);
+	run_ptrace(PTRACE_SETOPTIONS, sp, NULL,
 		PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
-	ptrace_cont_syscall(pid, 0, false);
+	ptrace_cont_syscall(sp, 0, false);
 }
 
 void ptrace_traceme(void)
 {
-	ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+	run_ptrace(PTRACE_TRACEME, NULL, NULL, NULL);
 }
 
-int ptrace_wait(int pid, int *st)
+int ptrace_wait(struct pid *sp, int *st)
 {
 	int rc, status;
+	int pid = sp ? sp->pid : -1;
 
 	rc = waitpid(pid, &status, __WALL);
 
@@ -102,7 +109,7 @@ int ptrace_wait(int pid, int *st)
 	else if (WIFSTOPPED(status) &&
 	         WSTOPSIG(status) != SIGSTOP &&
 	         WSTOPSIG(status) != SIGTRAP)
-		dbg(1, "wait(%d): process stopped with signal %d\n", pid, WSTOPSIG(status));
+		dbg(1, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
 
 	if (st)
 		*st = status;
@@ -110,16 +117,16 @@ int ptrace_wait(int pid, int *st)
 	return rc;
 }
 
-static inline void _ptrace_cont(bool syscall, int pid, unsigned long sig, bool w8)
+static inline void _ptrace_cont(bool syscall, struct pid *sp, unsigned long sig, bool w8)
 {
 	int status;
 
 	while (1) {
-		ptrace(syscall ? PTRACE_SYSCALL : PTRACE_CONT, pid, NULL, (void *) sig);
+		run_ptrace(syscall ? PTRACE_SYSCALL : PTRACE_CONT, sp, NULL, (void *) sig);
 		if (!w8)
 			break;
 
-		ptrace_wait(pid, &status);
+		ptrace_wait(sp, &status);
 		if (!WIFSTOPPED(status))
 			break;
 
@@ -129,20 +136,27 @@ static inline void _ptrace_cont(bool syscall, int pid, unsigned long sig, bool w
 	}
 }
 
-void ptrace_cont(int pid, unsigned long sig, bool w8) { _ptrace_cont(false, pid, sig, w8); }
-void ptrace_cont_syscall(int pid, unsigned long sig, bool w8) { _ptrace_cont(true, pid, sig, w8); }
-
-void ptrace_detach(int pid)
+void ptrace_cont(struct pid *sp, unsigned long sig, bool w8)
 {
-	ptrace(PTRACE_DETACH, pid, NULL, NULL);
+	_ptrace_cont(false, sp, sig, w8);
 }
 
-void ptrace_kill(int pid)
+void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool w8)
 {
-	kill(pid, SIGKILL);
+	_ptrace_cont(true, sp, sig, w8);
 }
 
-void ptrace_read(int pid, unsigned long addr, void *vptr, int len)
+void ptrace_detach(struct pid *sp)
+{
+	run_ptrace(PTRACE_DETACH, sp, NULL, NULL);
+}
+
+void ptrace_kill(struct pid *sp)
+{
+	kill(sp->pid, SIGKILL);
+}
+
+void ptrace_read(struct pid *sp, unsigned long addr, void *vptr, int len)
 {
 	int i , count;
 	uint32_t word;
@@ -151,13 +165,13 @@ void ptrace_read(int pid, unsigned long addr, void *vptr, int len)
 	count = i = 0;
 
 	while (count < len) {
-		word = ptrace(PTRACE_PEEKTEXT, pid, addr + count, NULL);
+		word = run_ptrace(PTRACE_PEEKTEXT, sp, addr + count, NULL);
 		count += 4;
 		ptr[i++] = word;
 	}
 }
 
-void ptrace_write(int pid, unsigned long addr, void *vptr, int len)
+void ptrace_write(struct pid *sp, unsigned long addr, void *vptr, int len)
 {
 	int i, count;
 	uint32_t *word;
@@ -166,17 +180,17 @@ void ptrace_write(int pid, unsigned long addr, void *vptr, int len)
 	i = count = 0;
 
 	while (count < len) {
-		ptrace(PTRACE_POKETEXT, pid, addr + count, *word++);
+		run_ptrace(PTRACE_POKETEXT, sp, addr + count, *word++);
 		count +=4;
 	}
 }
 
-void ptrace_getregs(int pid, struct user_regs_struct *regs)
+void ptrace_getregs(struct pid *sp, struct user_regs_struct *regs)
 {
-	ptrace(PTRACE_GETREGS, pid, NULL, regs);
+	run_ptrace(PTRACE_GETREGS, sp, NULL, regs);
 }
 
-void ptrace_setregs(int pid, struct user_regs_struct *regs)
+void ptrace_setregs(struct pid *sp, struct user_regs_struct *regs)
 {
-	ptrace(PTRACE_SETREGS, pid, NULL, regs);
+	run_ptrace(PTRACE_SETREGS, sp, NULL, regs);
 }

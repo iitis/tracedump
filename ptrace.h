@@ -12,43 +12,44 @@
 #include <sys/ptrace.h>
 
 /** Attach to process pid */
-void ptrace_attach_pid(int pid);
+void ptrace_attach_pid(struct pid *sp);
 
 /** Attach to a child which did PTRACE_TRACEME */
-void ptrace_attach_child(int pid);
+void ptrace_attach_child(struct pid *sp);
 
 /** Mark this proccess as waiting for ptrace */
 void ptrace_traceme(void);
 
 /** Wait for traced child - wrapper around waitpid()
  * @return          pid of the child which has stopped
- * @param status    optional addr for process stop info */
-int ptrace_wait(int pid, int *status);
+ * @param status    optional addr for process stop info
+ * @param sp        optional - if NULL, wait for any child */
+int ptrace_wait(struct pid *sp, int *status);
 
 /** Continue execution until INT3 */
-void ptrace_cont(int pid, unsigned long sig, bool w8);
+void ptrace_cont(struct pid *sp, unsigned long sig, bool w8);
 
 /** Continue until syscall */
-void ptrace_cont_syscall(int pid, unsigned long sig, bool wait);
+void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool wait);
 
 /** Detach from process pid */
-void ptrace_detach(int pid);
+void ptrace_detach(struct pid *sp);
 
 /** Kill traced child */
-void ptrace_kill(int pid);
+void ptrace_kill(struct pid *sp);
 
 /** Read data from location addr
  * @len length in bytes */
-void ptrace_read(int pid, unsigned long addr, void *vptr, int len);
+void ptrace_read(struct pid *sp, unsigned long addr, void *vptr, int len);
 
 /** Write data to location addr
  * @len length in bytes */
-void ptrace_write(int pid, unsigned long addr, void *vptr, int len);
+void ptrace_write(struct pid *sp, unsigned long addr, void *vptr, int len);
 
 /** Get process registers */
-void ptrace_getregs(int pid, struct user_regs_struct *regs);
+void ptrace_getregs(struct pid *sp, struct user_regs_struct *regs);
 
 /** Set process registers */
-void ptrace_setregs(int pid, struct user_regs_struct *regs);
+void ptrace_setregs(struct pid *sp, struct user_regs_struct *regs);
 
 #endif

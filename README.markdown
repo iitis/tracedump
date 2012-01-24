@@ -20,11 +20,10 @@ classification.
 ISSUES
 ======
 
+ * no Ctrl+C handling - on SIGINT some packets will be lost
  * the garbage collector is not yet implemented
  * the command line options facility is not yet implemented
  * packets past the first IP fragment will not be captured
  * sometimes the traced process segfaults
-   * more work on better ptrace transparency is required - especially on proper signal handling?
- * often the ptrace_getregs() aborts the whole sniffer
-  * this happens when the pid is goes away very quickly between SIGTRAP and PTRACE_GETREGS
- * cant start chromium-browser within tracedump, but attaching (to appropriate pid) works
+   * maybe more work on better ptrace transparency is required - especially on code injection?
+ * cant start chromium-browser within tracedump, but attaching works (to appropriate pid)

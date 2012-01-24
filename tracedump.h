@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <setjmp.h>
 
 struct tracedump;
 struct pid;
@@ -22,27 +23,29 @@ struct port;
 #include "ptrace.h"
 #include "utils.h"
 #include "pcap.h"
+#include "pid.h"
 
 /** Holds global program information */
 struct tracedump {
 	mmatic *mm;                           /**< global memory */
+	jmp_buf jmp;                          /**< for exception handling */
 
-	pid_t pid;                            /**< monitored pid (root) */
+	/* structures for process tracing */
 	struct pid *sp;                       /**< pid cache */
-
-	/* structures for ptrace */
 	thash *pids;                          /**< traced PIDs: (int pid)->(struct pid) */
 	thash *socks;                         /**< sockets: (int socknum)->(struct sock) */
 
-	/* structures for /proc/net/{tcp,udp} garbage collector */
+	/* structures for port tracking */
 	thash *tcp_ports;                     /**< monitored TCP ports: (int port)->(struct port) */
 	thash *udp_ports;                     /**< monitored UDP ports: (int port)->(struct port) */
 
+	/* structures for packet capture */
 	struct pcap *pc;                      /**< PCAP data */
 };
 
 /** Represents a process */
 struct pid {
+	struct tracedump *td;                 /**< path to the root */
 	int pid;                              /**< process ID */
 
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
@@ -65,5 +68,13 @@ struct port {
 	bool local;                           /**< local port if true, remote port otherwise */
 	int socknum;                          /**< socknum seen on last procfs read */
 };
+
+/* exceptions */
+#define EXCEPTION(td, code, arg) longjmp(td->jmp, ((code) & 0xffff) | ((arg) << 16))
+#define EXC_PTRACE 1
+
+/* assumes 32-bits in int */
+#define EXC_CODE(i) ((i) & 0xffff)
+#define EXC_ARG(i) ((i) >> 16)
 
 #endif
