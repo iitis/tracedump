@@ -56,7 +56,4 @@ void pc_deinit(struct tracedump *td);
 /** Update the BPF filter on the sniffer socket */
 void pc_update(struct tracedump *td);
 
-/** PCAP reader thread */
-void *pc_thread(void *arg);
-
 #endif

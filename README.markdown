@@ -20,8 +20,8 @@ classification.
 ISSUES
 ======
 
- * no Ctrl+C handling - on SIGINT some packets will be lost
- * the garbage collector is not yet implemented
+ * SIGINT handling: Ctrl+C kills attached child
+ * the garbage collector is not finished
  * the command line options facility is not yet implemented
  * packets past the first IP fragment will not be captured
  * sometimes the traced process segfaults

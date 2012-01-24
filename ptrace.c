@@ -26,16 +26,22 @@ static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 
 	rc = ptrace(request, pid, addr, data);
 
-	/* if retval is -1 exit with error, except for PTRACE_PEEK* */
-	if (rc == -1 &&
-		(errno != 0 || (
-			request != PTRACE_PEEKDATA &&
-			request != PTRACE_PEEKUSER
-	))) {
+	/* rc equal -1 means error */
+	if (rc == -1) {
+		/* skip errors on some conditions */
+		if (errno != 0) {
+			if (request == PTRACE_DETACH)
+				goto ret;
+		} else {
+			if (request == PTRACE_PEEKDATA || request == PTRACE_PEEKUSER)
+				goto ret;
+		}
+
 		dbg(1, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
 		EXCEPTION(sp->td, EXC_PTRACE, pid);
 	}
 
+ret:
 	return rc;
 }
 #define run_ptrace(a, b, c, d) _run_ptrace(a, b, ((void *) (c)), ((void *) (d)), __func__)
@@ -148,6 +154,7 @@ void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool w8)
 
 void ptrace_detach(struct pid *sp)
 {
+	dbg(1, "detaching PID %d\n", sp->pid);
 	run_ptrace(PTRACE_DETACH, sp, NULL, NULL);
 }
 

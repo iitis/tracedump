@@ -18,6 +18,7 @@
 //#define CHECK_BPF
 
 /* static functions */
+static void *sniffer_thread(void *arg);
 static int gencode_check_ports(thash *ports, bool outbound,
 	struct sock_filter *filter, int loc_drop, int loc_accept);
 static struct sock_fprog *gencode_alloc(struct tracedump *td);
@@ -56,9 +57,9 @@ void pc_init(struct tracedump *td)
 	fwrite(&ph, sizeof ph, 1, td->pc->fp);
 
 	/* start the reader thread */
-	i = pthread_create(&td->pc->reader, NULL, pc_thread, td);
+	i = pthread_create(&td->pc->reader, NULL, sniffer_thread, td);
 	if (i != 0)
-		die("pthread_create(pc_thread) failed with error %d\n", i);
+		die("pthread_create(sniffer_thread) failed with error %d\n", i);
 
 	/* update the filter */
 	pc_update(td);
@@ -82,7 +83,9 @@ void pc_update(struct tracedump *td)
 	struct sock_fprog *fp;
 
 	/* generate BPF filter code basing on the current port list */
+	pthread_mutex_lock(&td->mutex_ports);
 	fp = gencode_alloc(td);
+	pthread_mutex_unlock(&td->mutex_ports);
 
 #ifdef CHECK_BPF
 	/* verify the code on the user side - useful for debugging */
@@ -97,7 +100,9 @@ void pc_update(struct tracedump *td)
 	mmatic_free(fp);
 }
 
-void *pc_thread(void *arg)
+/****************************************************************************/
+
+void *sniffer_thread(void *arg)
 {
 	struct tracedump *td;
 	int i, snaplen, inclen;
@@ -270,7 +275,7 @@ static int gencode_check_ports(thash *ports, bool outbound,
 	i++;
 
 	thash_reset(ports);
-	while ((sp = thash_iter_uint(ports, &port))) {
+	while ((sp = thash_uint_iter(ports, &port))) {
 		if (sp->local != outbound) continue;
 
 		memcpy(filter+i, &check_ports[1], sizeof *check_ports);
@@ -285,7 +290,7 @@ static int gencode_check_ports(thash *ports, bool outbound,
 	i++;
 
 	thash_reset(ports);
-	while ((sp = thash_iter_uint(ports, &port))) {
+	while ((sp = thash_uint_iter(ports, &port))) {
 		if (sp->local == outbound) continue;
 
 		memcpy(filter+i, &check_ports[1], sizeof *check_ports);

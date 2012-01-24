@@ -4,52 +4,19 @@
  * Licensed under GNU GPL v. 3
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <sys/user.h>
-#include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <linux/net.h>
 #include <libpjf/main.h>
-#include <setjmp.h>
-
 #include "tracedump.h"
 
-static void td_add_port(struct tracedump *td, struct sock *ss, bool local)
+static bool EXITING = false;
+
+static void sighandler(int signum)
 {
-	struct port *sp;
-	thash *ports;
-
-	if (ss->type == SOCK_DGRAM)
-		ports = td->udp_ports;
-	else if (ss->type == SOCK_STREAM)
-		ports = td->tcp_ports;
-	else
-		die("invalid ss->type\n");
-
-	sp = thash_uint_get(ports, ss->port);
-	if (!sp) {
-		sp = mmatic_zalloc(td->mm, sizeof *sp);
-		thash_uint_set(ports, ss->port, sp);
-	} else {
-		dbg(1, "port %d/%s already exists\n", ss->port,
-			ss->type == SOCK_STREAM ? "TCP" : "UDP");
-	}
-
-	gettimeofday(&sp->last, NULL);
-	sp->local = local;
-	sp->socknum = ss->socknum;
-
-	dbg(3, "port %d/%s added\n", ss->port,
-		ss->type == SOCK_STREAM ? "TCP" : "UDP");
+	EXITING = true;
 }
 
-static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
+static void handle_socket(struct pid *sp, int fd)
 {
+	struct tracedump *td = sp->td;
 	char buf[128], buf2[128];
 	int len, socknum;
 	struct sock *ss;
@@ -63,7 +30,7 @@ static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 
 	/* is it a socket at all? */
 	if (len < 10 || strncmp(buf2, "socket:[", 8) != 0)
-		return NULL;
+		return;
 
 	/* get socknum */
 	buf2[len - 1] = 0;
@@ -71,12 +38,13 @@ static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 
 	/* check if in cache */
 	if (sp->ss && sp->ss->socknum == socknum)
-		return sp->ss;
+		return;
 
 	/* get socket info */
 	ss = thash_uint_get(td->socks, socknum);
 	if (!ss) {
 		ss = mmatic_zalloc(td->mm, sizeof *ss);
+		ss->td = td;
 		ss->socknum = socknum;
 		thash_uint_set(td->socks, socknum, ss);
 
@@ -110,7 +78,7 @@ static struct sock *td_get_sock(struct tracedump *td, struct pid *sp, int fd)
 
 		ss->port = ntohs(sa.sin_port);
 
-		td_add_port(td, ss, true);
+		port_add(ss, true);
 		pc_update(td);
 
 handled:
@@ -120,9 +88,6 @@ handled:
 			sp->in_socketcall = false;
 		}
 	}
-
-	sp->ss = ss;
-	return ss;
 }
 
 int main(int argc, char *argv[])
@@ -131,7 +96,6 @@ int main(int argc, char *argv[])
 	struct tracedump *td;
 	pid_t pid;
 	struct pid *sp;
-	struct sock *ss;
 	unsigned long fd_arg;
 	struct user_regs_struct regs;
 	int status;
@@ -153,6 +117,7 @@ int main(int argc, char *argv[])
 	mm = mmatic_create();
 	td = mmatic_zalloc(mm, sizeof *td);
 	td->mm = mm;
+	pthread_mutex_init(&td->mutex_ports, NULL);
 
 	/* create hashing tables */
 	td->pids = thash_create_intkey(mmatic_free, td->mm);
@@ -160,7 +125,7 @@ int main(int argc, char *argv[])
 	td->tcp_ports = thash_create_intkey(mmatic_free, td->mm);
 	td->udp_ports = thash_create_intkey(mmatic_free, td->mm);
 
-	/*************/
+	/************ attach the victim :) */
 
 	/* handle premature exceptions */
 	if ((i = setjmp(td->jmp)) != 0)
@@ -183,16 +148,16 @@ int main(int argc, char *argv[])
 		ptrace_attach_child(pid_get(td, pid));
 	}
 
-	/*************/
+	/************ start threads */
 
-	/* TODO: separate /proc/net/udp,tcp garbage collector
-	  1. update struct port.last fields
-	  2. iterate through td->tcp/udp_ports and delete those with old port.last fields */
-
-	/* start the pcap thread */
+	/* start the garbage collector and sniffer threads */
+	port_init(td);
 	pc_init(td);
 
-	/*************/
+	/************ main thread */
+
+	signal(SIGINT, sighandler);
+	signal(SIGTERM, sighandler);
 
 	/* handle exceptions */
 	if ((i = setjmp(td->jmp)) != 0) {
@@ -206,9 +171,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	while (1) {
+	while (EXITING == false) {
 		/* wait for syscall from any pid */
 		stopped_pid = ptrace_wait(NULL, &status);
+
+		/* TODO: filter out our threads :) */
 
 		if (stopped_pid == -1) {
 			dbg(1, "No more children\n");
@@ -254,10 +221,8 @@ int main(int argc, char *argv[])
 			/* get fd number */
 			ptrace_read(sp, regs.ecx, &fd_arg, 4);
 
-			/* get the underlying socket and start monitoring if its new */
-			ss = td_get_sock(td, sp, fd_arg);
-
-			/* at this moment the socket has been handled */
+			/* handle the socket underlying given fd */
+			handle_socket(sp, fd_arg);
 		}
 
 next_syscall:
@@ -266,7 +231,12 @@ next_syscall:
 
 	/*****************************/
 
+	dbg(1, "exiting\n");
+
+	pid_detach_all(td);
 	pc_deinit(td);
+	port_deinit(td);
+
 	mmatic_destroy(mm);
 
 	return 0;

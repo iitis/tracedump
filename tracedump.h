@@ -8,11 +8,21 @@
 #define _TRACEDUMP_H_
 
 #include <stdio.h>
-#include <libpjf/lib.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/user.h>
+#include <sys/syscall.h>
+#include <linux/net.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <pthread.h>
+
+#include <libpjf/lib.h>
 
 struct tracedump;
 struct pid;
@@ -24,6 +34,7 @@ struct port;
 #include "utils.h"
 #include "pcap.h"
 #include "pid.h"
+#include "port.h"
 
 /** Holds global program information */
 struct tracedump {
@@ -36,6 +47,8 @@ struct tracedump {
 	thash *socks;                         /**< sockets: (int socknum)->(struct sock) */
 
 	/* structures for port tracking */
+	pthread_mutex_t mutex_ports;          /**< guards tcp_ports and udp_ports */
+	pthread_t thread_gc;                  /**< garbage collector thread */
 	thash *tcp_ports;                     /**< monitored TCP ports: (int port)->(struct port) */
 	thash *udp_ports;                     /**< monitored UDP ports: (int port)->(struct port) */
 
@@ -45,7 +58,7 @@ struct tracedump {
 
 /** Represents a process */
 struct pid {
-	struct tracedump *td;                 /**< path to the root */
+	struct tracedump *td;                 /**< path to the root data structure */
 	int pid;                              /**< process ID */
 
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
@@ -57,6 +70,7 @@ struct pid {
 
 /** Represents a socket */
 struct sock {
+	struct tracedump *td;                 /**< path to the root data structure */
 	int socknum;                          /**< socket number */
 	int type;                             /**< socket type, ie. SOCK_STREAM or SOCK_DGRAM */
 	unsigned long port;                   /**< if TCP or UDP: port number */
