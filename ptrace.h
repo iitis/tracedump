@@ -33,7 +33,7 @@ void ptrace_cont(struct pid *sp, unsigned long sig, bool w8);
 void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool wait);
 
 /** Detach from process pid */
-void ptrace_detach(struct pid *sp);
+long ptrace_detach(struct pid *sp, unsigned long sig);
 
 /** Kill traced child */
 void ptrace_kill(struct pid *sp);

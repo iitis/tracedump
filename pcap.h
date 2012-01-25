@@ -48,12 +48,12 @@ struct pcap_sll_hdr {
 };
 
 /** Initialize PCAP and set the "null filter" */
-void pc_init(struct tracedump *td);
+void pcap_init(struct tracedump *td);
 
-/** Reverse of pc_init() */
-void pc_deinit(struct tracedump *td);
+/** Reverse of pcap_init() */
+void pcap_deinit(struct tracedump *td);
 
 /** Update the BPF filter on the sniffer socket */
-void pc_update(struct tracedump *td);
+void pcap_update(struct tracedump *td);
 
 #endif

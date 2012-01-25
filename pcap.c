@@ -26,7 +26,7 @@ static struct sock_fprog *gencode_alloc(struct tracedump *td);
 static int sk_chk_filter(struct sock_filter *filter, unsigned int flen);
 #endif
 
-void pc_init(struct tracedump *td)
+void pcap_init(struct tracedump *td)
 {
 	int i;
 	struct sockaddr_ll ll;
@@ -62,10 +62,10 @@ void pc_init(struct tracedump *td)
 		die("pthread_create(sniffer_thread) failed with error %d\n", i);
 
 	/* update the filter */
-	pc_update(td);
+	pcap_update(td);
 }
 
-void pc_deinit(struct tracedump *td)
+void pcap_deinit(struct tracedump *td)
 {
 	/* close the reader and wait for it */
 	pthread_cancel(td->pc->reader);
@@ -78,7 +78,7 @@ void pc_deinit(struct tracedump *td)
 	mmatic_free(td->pc);
 }
 
-void pc_update(struct tracedump *td)
+void pcap_update(struct tracedump *td)
 {
 	struct sock_fprog *fp;
 

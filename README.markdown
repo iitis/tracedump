@@ -20,10 +20,10 @@ classification.
 ISSUES
 ======
 
- * SIGINT handling: Ctrl+C kills attached child
+ * if attaching, the already opened connections are not read (yet)
  * the garbage collector is not finished
  * the command line options facility is not yet implemented
  * packets past the first IP fragment will not be captured
- * sometimes the traced process segfaults
+ * sometimes the traced process segfaults - eg. Firefox started from tracedump
    * maybe more work on better ptrace transparency is required - especially on code injection?
  * cant start chromium-browser within tracedump, but attaching works (to appropriate pid)

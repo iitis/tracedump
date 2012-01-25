@@ -81,7 +81,7 @@ static void handle_socket(struct pid *sp, int fd)
 		ss->port = ntohs(sa.sin_port);
 
 		port_add(ss, true);
-		pc_update(td);
+		pcap_update(td);
 
 handled:
 		/* finish the original socketcall */
@@ -155,7 +155,7 @@ int main(int argc, char *argv[])
 
 	/* start the garbage collector and sniffer threads */
 	port_init(td);
-	pc_init(td);
+	pcap_init(td);
 
 	/************ main thread */
 
@@ -244,10 +244,9 @@ next_syscall:
 
 	dbg(1, "exiting\n");
 
-	pid_detach_all(td);
-	pc_deinit(td);
 	port_deinit(td);
-
+	pcap_deinit(td);
+	pid_detach_all(td);
 	mmatic_destroy(mm);
 
 	return 0;

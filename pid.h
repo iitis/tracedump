@@ -18,4 +18,8 @@ void pid_del(struct tracedump *td, pid_t pid);
 /** Detach from all pids */
 void pid_detach_all(struct tracedump *td);
 
+/** Get thread group id
+ * @retval 0 error */
+int pid_tgid(pid_t pid);
+
 #endif
