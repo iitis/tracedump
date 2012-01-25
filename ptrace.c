@@ -154,8 +154,7 @@ void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool w8)
 
 long ptrace_detach(struct pid *sp, unsigned long sig)
 {
-	dbg(1, "detaching PID %d\n", sp->pid);
-	run_ptrace(PTRACE_DETACH, sp, NULL, (void *) sig);
+	return run_ptrace(PTRACE_DETACH, sp, NULL, (void *) sig);
 }
 
 void ptrace_kill(struct pid *sp)

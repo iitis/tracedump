@@ -78,7 +78,7 @@ struct sock {
 
 /** Represents a monitored port */
 struct port {
-	struct timeval last;                  /**< time when it was last seen in relevant procfs socket list */
+	struct timeval last;                  /**< time when it was last seen in the relevant procfs socket list */
 	bool local;                           /**< local port if true, remote port otherwise */
 	int socknum;                          /**< socknum seen on last procfs read */
 };

@@ -19,4 +19,13 @@ void port_deinit(struct tracedump *td);
  * @param local    if true, port in socket is a local port */
 void port_add(struct sock *ss, bool local);
 
+/** Get list of all local ports from procfs
+ * @param tcp    if true, list for TCP; UDP otherwise
+ * @retval NULL  error
+ * @note allocates memory in td->mm */
+void *port_list(struct tracedump *td, bool tcp);
+
+#define PORT_SET(list, port) list[port/8] |= 1 << (port%8)
+#define PORT_ISSET(list, port) ((list[port/8] >> (port%8)) & 1)
+
 #endif
