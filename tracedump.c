@@ -11,6 +11,8 @@ static bool EXITING = false;
 
 static void sighandler(int signum)
 {
+	signal(SIGINT, SIG_IGN);
+	signal(SIGTERM, SIG_IGN);
 	EXITING = true;
 }
 
@@ -101,6 +103,7 @@ int main(int argc, char *argv[])
 	int status;
 	int stopped_pid;
 	int i;
+	struct sigaction sa;
 
 	/*************/
 
@@ -156,8 +159,11 @@ int main(int argc, char *argv[])
 
 	/************ main thread */
 
-	signal(SIGINT, sighandler);
-	signal(SIGTERM, sighandler);
+	/* setup signal handling */
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = sighandler;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
 
 	/* handle exceptions */
 	if ((i = setjmp(td->jmp)) != 0) {
@@ -178,8 +184,13 @@ int main(int argc, char *argv[])
 		/* TODO: filter out our threads :) */
 
 		if (stopped_pid == -1) {
-			dbg(1, "No more children\n");
-			break;
+			if (EXITING == true) {
+				/* received Ctrl+C / SIGTERM */
+				break;
+			} else {
+				dbg(1, "No more children\n");
+				break;
+			}
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			pid_del(td, stopped_pid);
 			continue;

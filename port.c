@@ -9,8 +9,12 @@
 static void *gc_thread(void *arg)
 {
 	struct tracedump *td;
+	sigset_t ss;
 
 	td = (struct tracedump *) arg;
+	sigaddset(&ss, SIGTERM);
+	sigaddset(&ss, SIGINT);
+	pthread_sigmask(SIG_SETMASK, &ss, NULL);
 
 	while (1) {
 		/* TODO: read list of active tcp/udp ports */

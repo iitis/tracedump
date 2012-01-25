@@ -112,8 +112,12 @@ void *sniffer_thread(void *arg)
 	struct timeval ts;
 	struct sockaddr_ll ll;
 	socklen_t len;
+	sigset_t ss;
 
 	td = (struct tracedump *) arg;
+	sigaddset(&ss, SIGTERM);
+	sigaddset(&ss, SIGINT);
+	pthread_sigmask(SIG_SETMASK, &ss, NULL);
 
 	snaplen = 31337; // TODO
 
