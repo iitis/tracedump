@@ -11,6 +11,10 @@ static void *gc_thread(void *arg)
 	struct tracedump *td;
 	sigset_t ss;
 	uint8_t *tcp = NULL, *udp = NULL;
+	unsigned int port;
+	struct port *sp;
+	int count = 0;
+	struct timeval now;
 
 	td = (struct tracedump *) arg;
 	sigaddset(&ss, SIGTERM);
@@ -18,6 +22,8 @@ static void *gc_thread(void *arg)
 	pthread_sigmask(SIG_SETMASK, &ss, NULL);
 
 	while (1) {
+		sleep(60);
+
 		/* read list of active tcp/udp ports */
 		tcp = port_list(td, true);
 		udp = port_list(td, false);
@@ -26,16 +32,47 @@ static void *gc_thread(void *arg)
 			goto next;
 		}
 
+		/*
+		 * iterate through all monitored TCP/UDP ports and delete those
+		 * that are not needed anymore
+		 */
 		pthread_mutex_lock(&td->mutex_ports);
-		printf("yummie yummie\n");
-		/* TODO: remove old tcp/udp ports */
-		/* TODO: autobound TCP ports not visible on list */
+		gettimeofday(&now, NULL);
+
+		/* TCP */
+		thash_reset(td->tcp_ports);
+		while ((sp = thash_uint_iter(td->tcp_ports, &port))) {
+			/* skip ports "younger" than 60 secs
+			 * workaround that autobound TCP ports are not visible in procfs - Linux bug? */
+			if (pjf_timediff(&now, &sp->since)/1000000 < 60)
+				continue;
+
+			if (!PORT_ISSET(tcp, port)) {
+				count++;
+				thash_uint_set(td->tcp_ports, port, NULL);
+				dbg(3, "port TCP/%d deleted\n", port);
+			}
+		}
+
+		/* UDP */
+		thash_reset(td->udp_ports);
+		while ((sp = thash_uint_iter(td->udp_ports, &port))) {
+			if (!PORT_ISSET(udp, port)) {
+				count++;
+				thash_uint_set(td->udp_ports, port, NULL);
+				dbg(3, "port UDP/%d deleted\n", port);
+			}
+		}
+
 		pthread_mutex_unlock(&td->mutex_ports);
+
+		/* if any changes were made, run the BPF filter update */
+		if (count > 0)
+			pcap_update(td);
 
 next:
 		if (tcp) mmatic_free(tcp);
 		if (udp) mmatic_free(udp);
-		sleep(3);
 	}
 
 	return NULL;
@@ -77,14 +114,14 @@ void port_add(struct sock *ss, bool local)
 	if (!sp) {
 		sp = mmatic_zalloc(ss->td->mm, sizeof *sp);
 		thash_uint_set(ports, ss->port, sp);
+
+		dbg(3, "port %d/%s added\n", ss->port,
+			ss->type == SOCK_STREAM ? "TCP" : "UDP");
 	}
 
-	gettimeofday(&sp->last, NULL);
+	gettimeofday(&sp->since, NULL);
 	sp->local = local;
 	sp->socknum = ss->socknum;
-
-	dbg(3, "port %d/%s added\n", ss->port,
-		ss->type == SOCK_STREAM ? "TCP" : "UDP");
 
 	pthread_mutex_unlock(&ss->td->mutex_ports);
 }

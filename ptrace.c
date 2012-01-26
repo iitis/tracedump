@@ -4,17 +4,6 @@
  * Licensed under GNU GPL v. 3
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <unistd.h>
-#include <sys/ptrace.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <string.h>
-#include <dirent.h>
-
 #include "tracedump.h"
 
 static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
@@ -37,7 +26,7 @@ static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 				goto ret;
 		}
 
-		dbg(1, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
+		dbg(2, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
 		EXCEPTION(sp->td, EXC_PTRACE, pid);
 	}
 
@@ -46,7 +35,7 @@ ret:
 }
 #define run_ptrace(a, b, c, d) _run_ptrace(a, b, ((void *) (c)), ((void *) (d)), __func__)
 
-void ptrace_attach_pid(struct pid *sp)
+void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
 {
 	DIR *dh;
 	char buf[128];
@@ -68,24 +57,37 @@ void ptrace_attach_pid(struct pid *sp)
 
 			sp2 = pid_get(sp->td, pid);
 			run_ptrace(PTRACE_ATTACH, sp2, NULL, NULL);
-			ptrace_attach_child(sp2);
+			ptrace_attach_child(sp2, cb);
 		}
 
 		closedir(dh);
 	} else {
 		run_ptrace(PTRACE_ATTACH, sp, NULL, NULL);
-		ptrace_attach_child(sp);
+		ptrace_attach_child(sp, cb);
 	}
 }
 
-void ptrace_attach_child(struct pid *sp)
+int ptrace_attach_child(struct pid *sp, void (*cb)(struct pid *sp))
 {
-	dbg(1, "attaching PID %d\n", sp->pid);
+	int status;
 
-	ptrace_wait(sp, NULL);
-	run_ptrace(PTRACE_SETOPTIONS, sp, NULL,
-		PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
-	ptrace_cont_syscall(sp, 0, false);
+	ptrace_wait(sp, &status);
+	if (WIFSTOPPED(status) &&
+	   (WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTRAP)) {
+		dbg(2, "attached to PID %d\n", sp->pid);
+
+		run_ptrace(PTRACE_SETOPTIONS, sp, NULL,
+			PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
+
+		if (cb)
+			cb(sp);
+
+		ptrace_cont_syscall(sp, 0, false);
+		return 0;
+	} else {
+		dbg(1, "attaching PID %d failed\n", sp->pid);
+		return -1;
+	}
 }
 
 void ptrace_traceme(void)
@@ -101,7 +103,7 @@ int ptrace_wait(struct pid *sp, int *st)
 	rc = waitpid(pid, &status, __WALL);
 
 	if (rc == -1) {
-		dbg(1, "wait(%d): %s\n", pid, strerror(errno));
+		dbg(2, "wait(%d): %s\n", pid, strerror(errno));
 		return rc;
 	}
 
@@ -109,13 +111,13 @@ int ptrace_wait(struct pid *sp, int *st)
 		pid = rc;
 
 	if (WIFEXITED(status))
-		dbg(1, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
+		dbg(2, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
 	else if (WIFSIGNALED(status))
 		dbg(1, "wait(%d): process terminated with signal %d\n", pid, WTERMSIG(status));
 	else if (WIFSTOPPED(status) &&
 	         WSTOPSIG(status) != SIGSTOP &&
 	         WSTOPSIG(status) != SIGTRAP)
-		dbg(1, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
+		dbg(2, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
 
 	if (st)
 		*st = status;
@@ -152,9 +154,26 @@ void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool w8)
 	_ptrace_cont(true, sp, sig, w8);
 }
 
-long ptrace_detach(struct pid *sp, unsigned long sig)
+void ptrace_detach(struct pid *sp, unsigned long sig)
 {
-	return run_ptrace(PTRACE_DETACH, sp, NULL, (void *) sig);
+	int status;
+
+	/* are we lucky? */
+	if (run_ptrace(PTRACE_DETACH, sp, NULL, (void *) sig) == 0)
+		return;
+
+	/* no, the process is not detachable - try to stop it */
+	syscall(SYS_tgkill, pid_tgid(sp->pid), sp->pid, SIGSTOP);
+	ptrace_wait(sp, &status);
+
+	if (WIFSTOPPED(status)) {
+		if (WSTOPSIG(status) == SIGTRAP || WSTOPSIG(status) == SIGSTOP)
+			run_ptrace(PTRACE_DETACH, sp, NULL, (void *) SIGCONT);
+		else
+			run_ptrace(PTRACE_DETACH, sp, NULL, (void *) WSTOPSIG(status));
+	} else {
+		run_ptrace(PTRACE_DETACH, sp, NULL, (void *) 0);
+	}
 }
 
 void ptrace_kill(struct pid *sp)

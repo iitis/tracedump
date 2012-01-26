@@ -9,6 +9,90 @@
 
 static bool EXITING = false;
 
+/** Prints usage help screen */
+static void help(void)
+{
+	printf("Usage: tracedump [OPTIONS] <COMMAND...>\n");
+	printf("       tracedump [OPTIONS] <PID...>\n");
+	printf("\n");
+	printf("  A single application IP packet sniffer.\n");
+	printf("\n");
+	printf("Options:\n");
+	printf("  -w <file>              write output to <file> [dump.pcap]\n");
+	printf("                         use -w - for stdout output\n");
+	printf("  -s <bytes>             number of bytes to capture in each IP packet\n");
+	printf("                         use -s 0 for full packet contents\n");
+	printf("  --verbose,-V           be verbose (alias for --debug=5)\n");
+	printf("  --debug=<num>          set debugging level\n");
+	printf("  --help,-h              show this usage help screen\n");
+	printf("  --version,-v           show version and copying information\n");
+}
+
+/** Prints version and copying information. */
+static void version(void)
+{
+	printf("tracedump %s\n", TRACEDUMP_VERSION);
+	printf("Copyright (C) 2011-2012 IITiS PAN\n");
+	printf("Licensed under GNU GPL v3\n");
+	printf("Author: Paweł Foremski <pjf@iitis.pl>\n");
+	printf("Part of the MuTriCs project: <http://mutrics.iitis.pl/>\n");
+	printf("Realised under grant nr 2011/01/N/ST6/07202 of the Polish National Science Centre\n");
+}
+
+/** Parses arguments and loads modules
+ * @retval 0     ok
+ * @retval 1     error, main() should exit (eg. wrong arg. given)
+ * @retval 2     ok, but main() should exit (eg. on --version or --help) */
+static int parse_argv(struct tracedump *td, int argc, char *argv[])
+{
+	int i, c;
+
+	static char *short_opts = "hvVw:s:";
+	static struct option long_opts[] = {
+		/* name, has_arg, NULL, short_ch */
+		{ "verbose",    0, NULL,  1  },
+		{ "debug",      1, NULL,  2  },
+		{ "help",       0, NULL,  3  },
+		{ "version",    0, NULL,  4  },
+		{ 0, 0, 0, 0 }
+	};
+
+	/* defaults */
+	debug = 1;
+	td->opts.outfile = "dump.pcap";
+
+	for (;;) {
+		c = getopt_long(argc, argv, short_opts, long_opts, &i);
+		if (c == -1) break; /* end of options */
+
+		switch (c) {
+			case 'V':
+			case  1 : debug = 5; break;
+			case  2 : debug = atoi(optarg); break;
+			case 'h':
+			case  3 : help(); return 2;
+			case 'v':
+			case  4 : version(); return 2;
+			case 'w': td->opts.outfile = mmatic_strdup(td->mm, optarg); break;
+			case 's': td->opts.snaplen = atoi(optarg); break;
+			default: help(); return 1;
+		}
+	}
+
+	if (td->opts.snaplen <= 0)
+		td->opts.snaplen = UINT16_MAX;
+
+	if (argc - optind > 0) {
+		td->opts.src = argv + optind;
+		td->opts.srclen = argc - optind;
+	} else {
+		help();
+		return 1;
+	}
+
+	return 0;
+}
+
 static void sighandler(int signum)
 {
 	signal(SIGINT, SIG_IGN);
@@ -92,6 +176,29 @@ handled:
 	}
 }
 
+static void handle_attached_pid(struct pid *sp)
+{
+	DIR *dh;
+	char buf[128];
+	struct dirent *de;
+	int fd;
+
+	snprintf(buf, sizeof buf, "/proc/%d/fd", sp->pid);
+	dh = opendir(buf);
+	if (!dh)
+		return;
+
+	while ((de = readdir(dh))) {
+		if (!isdigit(de->d_name[0]))
+			continue;
+
+		fd = atoi(de->d_name);
+		handle_socket(sp, atoi(de->d_name));
+	}
+
+	closedir(dh);
+}
+
 int main(int argc, char *argv[])
 {
 	mmatic *mm;
@@ -107,15 +214,6 @@ int main(int argc, char *argv[])
 
 	/*************/
 
-	debug = 5;
-
-	if (argc < 2) {
-		printf("Usage: %s <pid to be traced>\n", argv[0]);
-		exit(1);
-	}
-
-	/*************/
-
 	/* initialize */
 	mm = mmatic_create();
 	td = mmatic_zalloc(mm, sizeof *td);
@@ -128,34 +226,47 @@ int main(int argc, char *argv[])
 	td->tcp_ports = thash_create_intkey(mmatic_free, td->mm);
 	td->udp_ports = thash_create_intkey(mmatic_free, td->mm);
 
+	/*************/
+
+	/* parse command line options */
+	if (parse_argv(td, argc, argv))
+		return 1;
+
+	/************ start threads */
+
+	/* start the garbage collector and sniffer threads
+	 * note: the GC calls pcap_update(), so the order of initialization is important */
+	pcap_init(td);
+	port_init(td);
+
 	/************ attach the victim :) */
 
 	/* handle premature exceptions */
 	if ((i = setjmp(td->jmp)) != 0)
 		die("exception %d, arg %d\n", EXC_CODE(i), EXC_ARG(i));
 
-	if (isdigit(argv[1][0])) {
-		/* attach to process */
-		pid = atoi(argv[1]);
-		ptrace_attach_pid(pid_get(td, pid));
+	if (isdigit(td->opts.src[0][0])) {
+		/* attach to processes */
+		for (i = 0; i < td->opts.srclen; i++) {
+			pid = atoi(td->opts.src[i]);
+			ptrace_attach_pid(pid_get(td, pid), handle_attached_pid);
+		}
 	} else {
 		/* attach to child */
 		pid = fork();
 
 		if (pid == 0) {
 			ptrace_traceme();
-			execvp(argv[1], argv+1);
-			exit(123);
+			execvp(td->opts.src[0], td->opts.src + 0);
+
+			/* if fails: */
+			fprintf(stderr, "%s: %s\n", argv[1], strerror(errno));
+			exit(127);
 		}
 
-		ptrace_attach_child(pid_get(td, pid));
+		if (ptrace_attach_child(pid_get(td, pid), NULL) < 0)
+			return 127;
 	}
-
-	/************ start threads */
-
-	/* start the garbage collector and sniffer threads */
-	port_init(td);
-	pcap_init(td);
 
 	/************ main thread */
 
@@ -181,16 +292,10 @@ int main(int argc, char *argv[])
 		/* wait for syscall from any pid */
 		stopped_pid = ptrace_wait(NULL, &status);
 
-		/* TODO: filter out our threads :) */
+		/* TODO?: filter out our threads :) */
 
 		if (stopped_pid == -1) {
-			if (EXITING == true) {
-				/* received Ctrl+C / SIGTERM */
-				break;
-			} else {
-				dbg(1, "No more children\n");
-				break;
-			}
+			break;
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			pid_del(td, stopped_pid);
 			continue;
@@ -241,8 +346,6 @@ next_syscall:
 	}
 
 	/*****************************/
-
-	dbg(1, "exiting\n");
 
 	port_deinit(td);
 	pcap_deinit(td);

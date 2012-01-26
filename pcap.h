@@ -7,7 +7,6 @@
 #ifndef _PCAP_H_
 #define _PCAP_H_
 
-#include <pthread.h>
 #include "tracedump.h"
 
 /** Represents internal data */

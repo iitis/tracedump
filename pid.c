@@ -35,38 +35,11 @@ void pid_del(struct tracedump *td, pid_t pid)
 void pid_detach_all(struct tracedump *td)
 {
 	struct pid *sp;
-	int status, rc;
 
 	thash_reset(td->pids);
 	while ((sp = thash_uint_iter(td->pids, NULL))) {
-		/* nice & clean? */
-		if (ptrace_detach(sp, 0) == 0) {
-			thash_uint_set(td->pids, sp->pid, NULL);
-			continue;
-		}
-
-		/* ESRCH probably means that the traced process is not in a state appropriate for
-		 * PTRACE_DETACH - send it SIGSTOP, wait, and try again */
-		if (errno == ESRCH) {
-			syscall(SYS_tgkill, pid_tgid(sp->pid), sp->pid, SIGSTOP);
-			ptrace_wait(sp, &status);
-
-			if (WIFSTOPPED(status)) {
-				switch (WSTOPSIG(status)) {
-					case SIGTRAP:
-					case SIGSTOP: rc = ptrace_detach(sp, SIGCONT); break;
-					default:      rc = ptrace_detach(sp, WSTOPSIG(status)); break;
-				}
-			} else {
-				rc = ptrace_detach(sp, 0);
-			}
-
-			/* check if that worked */
-			if (rc == 0)
-				continue;
-		}
-
-		dbg(1, "error while detaching pid %d: %s\n", sp->pid, strerror(errno));
+		ptrace_detach(sp, 0);
+		pid_del(td, sp->pid);
 	}
 }
 

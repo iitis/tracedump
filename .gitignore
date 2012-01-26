@@ -1,0 +1,4 @@
+tracedump
+*.pcap
+*.o
+.*.swp

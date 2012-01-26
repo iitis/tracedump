@@ -31,7 +31,7 @@ VERSION ?= $(TARVER)
 endif
 
 default: all
-all: version.h $(TARGETS)
+all: $(TARGETS)
 
 clean-std:
 	-rm -f *.o $(TARGETS) *.core core version.h

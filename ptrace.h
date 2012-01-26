@@ -11,11 +11,15 @@
 #include <stdint.h>
 #include <sys/ptrace.h>
 
-/** Attach to process pid */
-void ptrace_attach_pid(struct pid *sp);
+/** Attach to process pid
+ * @param cb      call cb before continuing */
+void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp));
 
-/** Attach to a child which did PTRACE_TRACEME */
-void ptrace_attach_child(struct pid *sp);
+/** Attach to a child which did PTRACE_TRACEME
+ * @param cb      call cb before continuing
+ * @retval  0     success
+ * @retval -1     attaching failed */
+int ptrace_attach_child(struct pid *sp, void (*cb)(struct pid *sp));
 
 /** Mark this proccess as waiting for ptrace */
 void ptrace_traceme(void);
@@ -33,7 +37,7 @@ void ptrace_cont(struct pid *sp, unsigned long sig, bool w8);
 void ptrace_cont_syscall(struct pid *sp, unsigned long sig, bool wait);
 
 /** Detach from process pid */
-long ptrace_detach(struct pid *sp, unsigned long sig);
+void ptrace_detach(struct pid *sp, unsigned long sig);
 
 /** Kill traced child */
 void ptrace_kill(struct pid *sp);

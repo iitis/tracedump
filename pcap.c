@@ -39,12 +39,23 @@ void pcap_init(struct tracedump *td)
 	memset(&ll, 0, sizeof ll);
 	ll.sll_family = AF_PACKET;
 	td->pc->fd = socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_ALL));
-	if (td->pc->fd == -1)
+	if (td->pc->fd == -1) {
+		dbg(1, "Could not connect to the sniffing socket - insufficient privileges?\n");
 		die_errno("socket");
+	}
 
 	/* open the resultant file */
-	td->pc->fp = fopen("dump.pcap", "w"); // TODO
-	if (!td->pc->fp) die_errno("fopen");
+	if (streq(td->opts.outfile, "-")) {
+		td->pc->fp = stdout;
+	} else {
+		td->pc->fp = fopen(td->opts.outfile, "w");
+		if (!td->pc->fp) {
+			dbg(1, "Could not open the output file: %s\n", td->opts.outfile);
+			die_errno("fopen");
+		}
+
+		dbg(1, "Writing packets to %s\n", td->opts.outfile);
+	}
 
 	/* write the global header */
 	ph.magic_number  = PCAP_MAGIC_NUMBER;
@@ -52,7 +63,7 @@ void pcap_init(struct tracedump *td)
 	ph.version_minor = 4;
 	ph.thiszone      = 0;
 	ph.sigfigs       = 0;
-	ph.snaplen       = 31337; // TODO
+	ph.snaplen       = td->opts.snaplen;
 	ph.network       = LINKTYPE_LINUX_SLL;
 	fwrite(&ph, sizeof ph, 1, td->pc->fp);
 
@@ -82,10 +93,10 @@ void pcap_update(struct tracedump *td)
 {
 	struct sock_fprog *fp;
 
-	/* generate BPF filter code basing on the current port list */
 	pthread_mutex_lock(&td->mutex_ports);
+
+	/* generate BPF filter code basing on the current port list */
 	fp = gencode_alloc(td);
-	pthread_mutex_unlock(&td->mutex_ports);
 
 #ifdef CHECK_BPF
 	/* verify the code on the user side - useful for debugging */
@@ -96,6 +107,7 @@ void pcap_update(struct tracedump *td)
 	if (setsockopt(td->pc->fd, SOL_SOCKET, SO_ATTACH_FILTER, fp, sizeof *fp) != 0)
 		die_errno("setsockopt");
 
+	pthread_mutex_unlock(&td->mutex_ports);
 	mmatic_free(fp->filter);
 	mmatic_free(fp);
 }
@@ -105,7 +117,7 @@ void pcap_update(struct tracedump *td)
 void *sniffer_thread(void *arg)
 {
 	struct tracedump *td;
-	int i, snaplen, inclen;
+	int i, inclen;
 	uint8_t pkt[8192];
 	struct pcap_pkt_hdr pp;
 	struct pcap_sll_hdr ps;
@@ -119,8 +131,6 @@ void *sniffer_thread(void *arg)
 	sigaddset(&ss, SIGINT);
 	pthread_sigmask(SIG_SETMASK, &ss, NULL);
 
-	snaplen = 31337; // TODO
-
 	/* write the packets */
 	while ((len = sizeof ll) &&
 	       (i = recvfrom(td->pc->fd, pkt, sizeof pkt, 0, (struct sockaddr *) &ll, &len)) > 0) {
@@ -133,7 +143,7 @@ void *sniffer_thread(void *arg)
 			die_errno("ioctl");
 
 		/* write the PCAP header */
-		inclen = MIN(snaplen, i);
+		inclen = MIN(td->opts.snaplen, i);
 		pp.ts_sec   = ts.tv_sec;
 		pp.ts_usec  = ts.tv_usec;
 		pp.orig_len = i + sizeof ps;

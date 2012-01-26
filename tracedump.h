@@ -11,18 +11,24 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <dirent.h>
+#include <getopt.h>
 
 #include <sys/types.h>
+#include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <linux/net.h>
 #include <signal.h>
 #include <setjmp.h>
 #include <pthread.h>
 
 #include <libpjf/lib.h>
+
+#define TRACEDUMP_VERSION "0.5"
 
 struct tracedump;
 struct pid;
@@ -31,7 +37,6 @@ struct port;
 
 #include "inject.h"
 #include "ptrace.h"
-#include "utils.h"
 #include "pcap.h"
 #include "pid.h"
 #include "port.h"
@@ -40,6 +45,14 @@ struct port;
 struct tracedump {
 	mmatic *mm;                           /**< global memory */
 	jmp_buf jmp;                          /**< for exception handling */
+
+	/* options */
+	struct {
+		char **src;                       /**< packet source (pointer on argv) */
+		int srclen;                       /**< number of elements in src[] */
+		char *outfile;                    /**< path to output file */
+		int snaplen;                      /**< PCAP snaplen */
+	} opts;
 
 	/* structures for process tracing */
 	struct pid *sp;                       /**< pid cache */
@@ -78,7 +91,7 @@ struct sock {
 
 /** Represents a monitored port */
 struct port {
-	struct timeval last;                  /**< time when it was last seen in the relevant procfs socket list */
+	struct timeval since;                 /**< time when it was first seen */
 	bool local;                           /**< local port if true, remote port otherwise */
 	int socknum;                          /**< socknum seen on last procfs read */
 };

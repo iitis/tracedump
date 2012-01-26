@@ -20,10 +20,18 @@ classification.
 ISSUES
 ======
 
- * if attaching, the already opened connections are not read (yet)
- * the garbage collector is not finished
- * the command line options facility is not yet implemented
- * packets past the first IP fragment will not be captured
- * sometimes the traced process segfaults - eg. Firefox started from tracedump
+ * sometimes the traced process segfaults
+   * eg. Firefox started from tracedump
+   * eg. Chrome on restoring multiple tabs
    * maybe more work on better ptrace transparency is required - especially on code injection?
  * cant start chromium-browser within tracedump, but attaching works (to appropriate pid)
+
+LIMITATIONS
+===========
+
+ * TODO: write about a probably better architecture? (skb.pid on POSTROUTING)
+ * IP packets past the first fragment will not be captured
+ * there is a low probability of loosing TCP/IP packets if the bind() and {connect(), listen()}
+   syscalls from the monitored application are distant by at least 60 seconds
+ * maximum number of monitored ports is limited to less than 300 ports, due to limits on the
+   BPF filter attached to the sniffing socket
