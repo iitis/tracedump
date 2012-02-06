@@ -17,6 +17,16 @@ Wireshark. It can be later used for detailed analysis of the networking operatio
 particular application. For instance it might be useful for automatic systems of IP traffic
 classification.
 
+More information: http://mutrics.iitis.pl/tracedump
+
+CITING TRACEDUMP
+================
+
+Please cite tracedump using the following publication:
+
+Foremski P., "Tracedump: A Novel Single Application IP Packet Sniffer", Theoretical and Applied
+Informatics, Vol. 24 No. 1/2012, Gliwice 2012
+
 ISSUES
 ======
 
@@ -29,9 +39,8 @@ ISSUES
 LIMITATIONS
 ===========
 
- * TODO: write about a probably better architecture? (skb.pid on POSTROUTING)
  * IP packets past the first fragment will not be captured
- * there is a low probability of loosing TCP/IP packets if the bind() and {connect(), listen()}
-   syscalls from the monitored application are distant by at least 60 seconds
+ * there is a low probability of loosing TCP packets if the time distance between a particular
+   bind() system call and a connect() or listen() call is greater than 60 seconds
  * maximum number of monitored ports is limited to less than 300 ports, due to limits on the
    BPF filter attached to the sniffing socket

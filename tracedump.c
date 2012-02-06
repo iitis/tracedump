@@ -36,7 +36,7 @@ static void version(void)
 	printf("Licensed under GNU GPL v3\n");
 	printf("Author: Paweł Foremski <pjf@iitis.pl>\n");
 	printf("Part of the MuTriCs project: <http://mutrics.iitis.pl/>\n");
-	printf("Realised under grant nr 2011/01/N/ST6/07202 of the Polish National Science Centre\n");
+	printf("Realized under grant nr 2011/01/N/ST6/07202 of the Polish National Science Centre\n");
 }
 
 /** Parses arguments and loads modules

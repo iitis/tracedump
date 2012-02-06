@@ -2,3 +2,4 @@ tracedump
 *.pcap
 *.o
 .*.swp
+doc/out
