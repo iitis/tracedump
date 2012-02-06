@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 IITiS PAN Gliwice <www.iitis.pl>
+ * Copyright (C) 2011-2012 IITiS PAN Gliwice <http://www.iitis.pl/>
  * Author: Paweł Foremski <pjf@iitis.pl>
  * Licensed under GNU GPL v. 3
  */
