@@ -28,11 +28,13 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	uint32_t *stack32;
 	int i, j;
 
+	dbg(4, "inject_socketcall(pid=%d, code=%d)\n", sp->pid, sc_code);
+
 	/*
 	 * get the required amount of stack space
 	 */
-	ss_vals = 0;
-	ss_mem = 0;
+	ss_vals = 0;  // stack space for immediate values
+	ss_mem = 0;   // stack space for pointer values
 	va_start(vl, sc_code);
 	do {
 		type = va_arg(vl, enum arg_type);
@@ -61,9 +63,9 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	/*
 	 * write the stack
 	 */
-	stack = mmatic_zalloc(td->mm, ss);
+	stack = mmatic_zalloc(td->mm, ss); // stack area for immediate values
 	stack32 = (uint32_t *) stack;
-	stack_mem = stack + ss_vals;
+	stack_mem = stack + ss_vals;       // stack area for pointer values
 
 	va_start(vl, sc_code);
 	i = 0; j = 0;
@@ -97,7 +99,7 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 
 	ptrace_write(sp, regs.eip, code, sizeof code);
 	ptrace_setregs(sp, &regs2);
-	ptrace_cont(sp, 0, true);
+	ptrace_cont(sp, 0, true); // sync call, wait for it
 
 	/*
 	 * read back

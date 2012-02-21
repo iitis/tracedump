@@ -66,3 +66,27 @@ int pid_tgid(pid_t pid)
 	fclose(fp);
 	return ret;
 }
+
+char *pid_state(pid_t pid)
+{
+	static char buf[256];
+	FILE *fp;
+	char *ret = NULL;
+
+	snprintf(buf, sizeof buf, "/proc/%d/status", pid);
+	fp = fopen(buf, "r");
+	if (!fp) {
+		dbg(1, "fopen(%s): %s\n", buf, strerror(errno));
+		return ret;
+	}
+
+	while (fgets(buf, sizeof buf, fp)) {
+		if (strncmp("State:", buf, 5) == 0) {
+			ret = buf+6;
+			break;
+		}
+	}
+
+	fclose(fp);
+	return ret;
+}

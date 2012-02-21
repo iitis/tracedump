@@ -46,11 +46,11 @@ enum arg_type {
  * @param td              tracedump root
  * @param pid             process id
  * @param sc_code         socketcall subcode (see include/linux/net.h)
- * @param varg1           enum arg_type
- * @param varg2           uint32_t: memory size or a value
- * @param varg3           OPTIONAL void *: address of the memory
+ * @param type            enum arg_type
+ * @param size_or_val     uint32_t: memory size or a value
+ * @param ptr             OPTIONAL void *: address of the memory
  * @param ...
- * @param 1, 0, 1
+ * @param AT_LAST
  * @return                socketcall() return code
  */
 int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code, ...);

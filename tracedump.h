@@ -23,7 +23,6 @@
 #include <sys/wait.h>
 #include <linux/net.h>
 #include <signal.h>
-#include <setjmp.h>
 #include <pthread.h>
 
 #include <libpjf/lib.h>
@@ -44,7 +43,6 @@ struct port;
 /** Holds global program information */
 struct tracedump {
 	mmatic *mm;                           /**< global memory */
-	jmp_buf jmp;                          /**< for exception handling */
 
 	/* options */
 	struct {
@@ -95,13 +93,5 @@ struct port {
 	bool local;                           /**< local port if true, remote port otherwise */
 	int socknum;                          /**< socknum seen on last procfs read */
 };
-
-/* exceptions */
-#define EXCEPTION(td, code, arg) longjmp(td->jmp, ((code) & 0xffff) | ((arg) << 16))
-#define EXC_PTRACE 1
-
-/* assumes 32-bits in int */
-#define EXC_CODE(i) ((i) & 0xffff)
-#define EXC_ARG(i) ((i) >> 16)
 
 #endif

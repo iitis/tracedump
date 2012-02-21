@@ -95,6 +95,7 @@ static int parse_argv(struct tracedump *td, int argc, char *argv[])
 
 static void sighandler(int signum)
 {
+	dbg(1, "Caught signal %d, exiting\n", signum);
 	signal(SIGINT, SIG_IGN);
 	signal(SIGTERM, SIG_IGN);
 	EXITING = true;
@@ -176,6 +177,7 @@ handled:
 	}
 }
 
+/** Try connecting to all file descriptors of a just-attached child */
 static void handle_attached_pid(struct pid *sp)
 {
 	DIR *dh;
@@ -210,6 +212,7 @@ int main(int argc, char *argv[])
 	int status;
 	int stopped_pid;
 	int i;
+	int attached;
 	struct sigaction sa;
 
 	/*************/
@@ -241,15 +244,14 @@ int main(int argc, char *argv[])
 
 	/************ attach the victim :) */
 
-	/* handle premature exceptions */
-	if ((i = setjmp(td->jmp)) != 0)
-		die("exception %d, arg %d\n", EXC_CODE(i), EXC_ARG(i));
+	attached = 0;
 
 	if (isdigit(td->opts.src[0][0])) {
 		/* attach to processes */
 		for (i = 0; i < td->opts.srclen; i++) {
 			pid = atoi(td->opts.src[i]);
-			ptrace_attach_pid(pid_get(td, pid), handle_attached_pid);
+			if (ptrace_attach_pid(pid_get(td, pid), handle_attached_pid) == 0)
+				attached++;
 		}
 	} else {
 		/* attach to child */
@@ -264,8 +266,15 @@ int main(int argc, char *argv[])
 			exit(127);
 		}
 
-		if (ptrace_attach_child(pid_get(td, pid), NULL) < 0)
-			return 127;
+		if (ptrace_attach_child(pid_get(td, pid), NULL) == 0)
+			attached++;
+	}
+
+	if (attached == 0) {
+		dbg(0, "No processes to trace, exiting\n");
+		return 127;
+	} else {
+		dbg(2, "Attached, starting\n");
 	}
 
 	/************ main thread */
@@ -275,18 +284,6 @@ int main(int argc, char *argv[])
 	sa.sa_handler = sighandler;
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
-
-	/* handle exceptions */
-	if ((i = setjmp(td->jmp)) != 0) {
-		switch (EXC_CODE(i)) {
-			case EXC_PTRACE:
-				dbg(1, "ptrace error: pid %d\n", EXC_ARG(i));
-				break;
-			default:
-				dbg(1, "exception %d, arg %d\n", EXC_CODE(i), EXC_ARG(i));
-				break;
-		}
-	}
 
 	while (EXITING == false) {
 		/* wait for syscall from any pid */

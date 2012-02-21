@@ -12,8 +12,10 @@
 #include <sys/ptrace.h>
 
 /** Attach to process pid
- * @param cb      call cb before continuing */
-void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp));
+ * @param cb      call cb before continuing
+ * @retval  0     success
+ * @retval -1     failed */
+int ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp));
 
 /** Attach to a child which did PTRACE_TRACEME
  * @param cb      call cb before continuing

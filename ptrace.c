@@ -6,6 +6,10 @@
 
 #include "tracedump.h"
 
+/** ptrace wrapper
+ * @retval >=0  success
+ * @retval  <0  error, return value is (-1 * errno)
+ */
 static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 	void *addr, void *data,
 	const char *func)
@@ -17,6 +21,8 @@ static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 
 	/* rc equal -1 means error */
 	if (rc == -1) {
+		rc = -errno;
+
 		/* skip errors on some conditions */
 		if (errno != 0) {
 			if (request == PTRACE_DETACH)
@@ -26,8 +32,10 @@ static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 				goto ret;
 		}
 
-		dbg(2, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
-		EXCEPTION(sp->td, EXC_PTRACE, pid);
+		dbg(1, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
+		dbg(1, "pid %d state: %s", pid_state(pid));
+	} else {
+		dbg(5, "%s(req %d, pid %d)\n", func, request, pid);
 	}
 
 ret:
@@ -35,7 +43,7 @@ ret:
 }
 #define run_ptrace(a, b, c, d) _run_ptrace(a, b, ((void *) (c)), ((void *) (d)), __func__)
 
-void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
+int ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
 {
 	DIR *dh;
 	char buf[128];
@@ -57,7 +65,8 @@ void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
 
 			sp2 = pid_get(sp->td, pid);
 			run_ptrace(PTRACE_ATTACH, sp2, NULL, NULL);
-			ptrace_attach_child(sp2, cb);
+			if (ptrace_attach_child(sp2, cb) < 0)
+				return -1;
 		}
 
 		closedir(dh);
@@ -65,6 +74,8 @@ void ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
 		run_ptrace(PTRACE_ATTACH, sp, NULL, NULL);
 		ptrace_attach_child(sp, cb);
 	}
+
+	return 0;
 }
 
 int ptrace_attach_child(struct pid *sp, void (*cb)(struct pid *sp))

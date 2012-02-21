@@ -22,4 +22,9 @@ void pid_detach_all(struct tracedump *td);
  * @retval 0 error */
 int pid_tgid(pid_t pid);
 
+/** Get task state
+ * @retval 0 error
+ * @return statically allocated string */
+char *pid_state(pid_t pid);
+
 #endif

@@ -1,6 +1,8 @@
 RONN ?= ronn --organization="IITiS PAN Gliwice" --pipe
 
 default: all
+	-doxygen Doxyfile
+
 all: \
 	out/tracedump.1.man out/tracedump.1.html
 
