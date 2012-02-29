@@ -33,7 +33,6 @@ static long _run_ptrace(enum __ptrace_request request, struct pid *sp,
 		}
 
 		dbg(1, "%s(req %d, pid %d): %s\n", func, request, pid, strerror(errno));
-		dbg(1, "pid %d state: %s", pid_state(pid));
 	} else {
 		dbg(5, "%s(req %d, pid %d)\n", func, request, pid);
 	}
@@ -80,16 +79,26 @@ int ptrace_attach_pid(struct pid *sp, void (*cb)(struct pid *sp))
 
 int ptrace_attach_child(struct pid *sp, void (*cb)(struct pid *sp))
 {
-	int status;
+	int rc, status;
+	FILE *fp;
+	char buf[128];
 
-	ptrace_wait(sp, &status);
-	if (WIFSTOPPED(status) &&
+	rc = waitpid(sp->pid, &status, __WALL);
+	if (rc == sp->pid && WIFSTOPPED(status) &&
 	   (WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTRAP)) {
-		dbg(2, "attached to PID %d\n", sp->pid);
+		/* read PID name */
+		snprintf(buf, sizeof buf, "/proc/%d/cmdline", sp->pid);
+		fp = fopen(buf, "r");
+		fgets(sp->cmdline, sizeof sp->cmdline, fp);
+		fclose(fp);
 
+		dbg(1, "attached to PID %d (%s)\n", sp->pid, sp->cmdline);
+
+		/* set ptrace options */
 		run_ptrace(PTRACE_SETOPTIONS, sp, NULL,
-			PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE);
+			PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE | PTRACE_O_TRACESYSGOOD);
 
+		/* callback */
 		if (cb)
 			cb(sp);
 
@@ -124,11 +133,20 @@ int ptrace_wait(struct pid *sp, int *st)
 	if (WIFEXITED(status))
 		dbg(2, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
 	else if (WIFSIGNALED(status))
-		dbg(1, "wait(%d): process terminated with signal %d\n", pid, WTERMSIG(status));
-	else if (WIFSTOPPED(status) &&
-	         WSTOPSIG(status) != SIGSTOP &&
-	         WSTOPSIG(status) != SIGTRAP)
-		dbg(2, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
+		dbg(2, "wait(%d): process terminated with signal %d\n", pid, WTERMSIG(status));
+	else if (WIFSTOPPED(status)) {
+		switch (WSTOPSIG(status)) {
+			case SIGSTOP:
+			case SIGTRAP:
+			case SIGTRAPS:
+				break;
+			case SIGSEGV:
+				dbg(1, "wait(%d): process received SIGSEGV - segmentation fault\n", pid);
+				break;
+			default:
+				dbg(2, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
+		}
+	}
 
 	if (st)
 		*st = status;
@@ -150,7 +168,7 @@ static inline void _ptrace_cont(bool syscall, struct pid *sp, unsigned long sig,
 			break;
 
 		sig = WSTOPSIG(status);
-		if (sig == SIGSTOP || sig == SIGTRAP)
+		if (sig == SIGTRAP || sig == SIGTRAPS)
 			break;
 	}
 }
@@ -178,10 +196,15 @@ void ptrace_detach(struct pid *sp, unsigned long sig)
 	ptrace_wait(sp, &status);
 
 	if (WIFSTOPPED(status)) {
-		if (WSTOPSIG(status) == SIGTRAP || WSTOPSIG(status) == SIGSTOP)
-			run_ptrace(PTRACE_DETACH, sp, NULL, (void *) SIGCONT);
-		else
-			run_ptrace(PTRACE_DETACH, sp, NULL, (void *) WSTOPSIG(status));
+		switch (WSTOPSIG(status)) {
+			case SIGSTOP:
+			case SIGTRAP:
+			case SIGTRAPS:
+				run_ptrace(PTRACE_DETACH, sp, NULL, (void *) SIGCONT);
+				break;
+			default:
+				run_ptrace(PTRACE_DETACH, sp, NULL, (void *) WSTOPSIG(status));
+		}
 	} else {
 		run_ptrace(PTRACE_DETACH, sp, NULL, (void *) 0);
 	}

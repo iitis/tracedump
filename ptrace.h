@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <sys/ptrace.h>
 
+#define SIGTRAPS (SIGTRAP | 0x80)
+
 /** Attach to process pid
  * @param cb      call cb before continuing
  * @retval  0     success

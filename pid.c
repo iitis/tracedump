@@ -18,9 +18,10 @@ struct pid *pid_get(struct tracedump *td, pid_t pid)
 	if (!sp) {
 		dbg(7, "new pid %d\n", pid);
 		sp = mmatic_zalloc(td->mm, sizeof *sp);
+		thash_uint_set(td->pids, pid, sp);
+
 		sp->td = td;
 		sp->pid = pid;
-		thash_uint_set(td->pids, pid, sp);
 	}
 
 	return sp;

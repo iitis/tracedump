@@ -211,6 +211,7 @@ int main(int argc, char *argv[])
 	struct user_regs_struct regs;
 	int status;
 	int stopped_pid;
+	int stopsig;
 	int i;
 	int attached;
 	struct sigaction sa;
@@ -289,25 +290,30 @@ int main(int argc, char *argv[])
 		/* wait for syscall from any pid */
 		stopped_pid = ptrace_wait(NULL, &status);
 
-		/* TODO?: filter out our threads :) */
-
 		if (stopped_pid == -1) {
 			break;
 		} else if (WIFEXITED(status) || WIFSIGNALED(status)) {
 			pid_del(td, stopped_pid);
 			continue;
+		} else if (!WIFSTOPPED(status)) {
+			goto next_syscall;
 		}
 
 		/* fetch pid info */
 		sp = pid_get(td, stopped_pid);
 
 		/* handle signal passing */
-		if (WIFSTOPPED(status)) {
-			if (WSTOPSIG(status) != SIGTRAP && WSTOPSIG(status) != SIGSTOP) {
+		stopsig = WSTOPSIG(status);
+		switch (stopsig) {
+			case SIGTRAPS:
+				break;
+			case SIGTRAP:
+			case SIGSTOP:
+				goto next_syscall;
+			default:
 				/* pass the signal to child */
-				ptrace_cont_syscall(sp, WSTOPSIG(status), false);
+				ptrace_cont_syscall(sp, stopsig, false);
 				continue;
-			}
 		}
 
 		/* get regs, skip syscalls other than socketcall */

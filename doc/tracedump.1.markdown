@@ -52,18 +52,17 @@ separated with spaces), or a command to execute with execvp(3).
 
 ## LIMITATIONS
 
- * currently works on x86-32 Linux hosts only
  * IP packets past the first fragment will not be captured
- * maximum number of monitored ports is limited to less than 300 ports, due to limits on the
-   BPF filter attached to the sniffing socket
+ * some applications (e.g. chromium-browser) cant be started from tracedump, but attaching to
+   existing process by PID works
 
 ## BUGS
 
- * sometimes the traced process segfaults - more testing needed
- * cant start chromium-browser within tracedump, but attaching works
+ * currently works on x86-32 Linux hosts only
+ * maximum number of monitored ports is limited to less than 300 ports, due to limits on the
+   BPF filter attached to the sniffing socket
  * there is a low probability of loosing TCP packets if the time distance between a particular
-   bind() system call and a connect() or listen() call is greater than 60 seconds
- * probably much more :)
+   bind() system call and a connect() or listen() call is greater than 10 seconds
 
 ## SEE ALSO
 

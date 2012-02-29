@@ -29,6 +29,8 @@
 
 #define TRACEDUMP_VERSION "0.5"
 
+//#define VDSO_PIGGYBACK
+
 struct tracedump;
 struct pid;
 struct sock;
@@ -71,12 +73,14 @@ struct tracedump {
 struct pid {
 	struct tracedump *td;                 /**< path to the root data structure */
 	int pid;                              /**< process ID */
+	char cmdline[128];                    /**< process cmdline */
 
 	bool in_socketcall;                   /**< true if in syscall 102 and its bind(), sendto() or connect() */
 	int code;                             /**< socketcall code */
 	struct sock *ss;                      /**< cache */
 
 	struct user_regs_struct regs;         /**< regs backup */
+	uint32_t vdso_addr;                   /**< VDSO address (linux-gate.so.1) */
 };
 
 /** Represents a socket */

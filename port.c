@@ -22,7 +22,7 @@ static void *gc_thread(void *arg)
 	pthread_sigmask(SIG_SETMASK, &ss, NULL);
 
 	while (1) {
-		sleep(60);
+		sleep(3);
 
 		/* read list of active tcp/udp ports */
 		tcp = port_list(td, true);
@@ -42,9 +42,9 @@ static void *gc_thread(void *arg)
 		/* TCP */
 		thash_reset(td->tcp_ports);
 		while ((sp = thash_uint_iter(td->tcp_ports, &port))) {
-			/* skip ports "younger" than 60 secs
+			/* skip ports "younger" than 10 secs
 			 * workaround that autobound TCP ports are not visible in procfs - Linux bug? */
-			if (pjf_timediff(&now, &sp->since)/1000000 < 60)
+			if (pjf_timediff(&now, &sp->since)/1000000 < 10)
 				continue;
 
 			if (!PORT_ISSET(tcp, port)) {

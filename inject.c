@@ -13,11 +13,47 @@
 
 #include "tracedump.h"
 
+static void _prepare(struct pid *sp)
+{
+	FILE *fp;
+	char buf[128];
+	unsigned char code[4] = { 0xcd, 0x80, 0, 0 }; // int 0x80
+
+	if (sp->vdso_addr)
+		return;
+
+	/* find VDSO address */
+	snprintf(buf, sizeof buf, "/proc/%d/maps", sp->pid);
+	fp = fopen(buf, "r");
+	while (fgets(buf, sizeof buf, fp)) {
+		if (strlen(buf) < 49 + 6)
+			continue;
+
+		/* found it? */
+		if (strncmp(buf + 49, "[vdso]", 6) == 0) {
+			/* parse address */
+			buf[8] = 0;
+			sp->vdso_addr = strtoul(buf, NULL, 16);
+			break;
+		}
+	}
+	fclose(fp);
+
+	if (!sp->vdso_addr)
+		dbg(0, "pid %d: no [vdso] memory region\n", sp->pid);
+
+#ifdef VDSO_PIGGYBACK
+	/* on x86-32 the INT 0x80 is already there :) */
+	sp->vdso_addr += 0x406;
+#else
+	/* inject our code */
+	dbg(3, "pid %d: installing code at 0x%x\n", sp->pid, sp->vdso_addr);
+	ptrace_write(sp, sp->vdso_addr, code, sizeof code);
+#endif
+}
+
 int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code, ...)
 {
-	/* int 0x80, int3 */
-	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
-	char backup[4];
 	struct user_regs_struct regs, regs2;
 	int ss_vals, ss_mem, ss;
 	va_list vl;
@@ -27,8 +63,6 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	uint8_t *stack, *stack_mem;
 	uint32_t *stack32;
 	int i, j;
-
-	dbg(4, "inject_socketcall(pid=%d, code=%d)\n", sp->pid, sc_code);
 
 	/*
 	 * get the required amount of stack space
@@ -58,7 +92,6 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	 */
 	ptrace_getregs(sp, &regs);
 	memcpy(&regs2, &regs, sizeof regs);
-	ptrace_read(sp, regs.eip, backup, sizeof backup);
 
 	/*
 	 * write the stack
@@ -93,13 +126,16 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	/*
 	 * write the code and run
 	 */
-	regs2.eax = 102; // socketcall
+	_prepare(sp);
+
+	regs2.eax = 102;            // socketcall
 	regs2.ebx = sc_code;
 	regs2.ecx = regs.esp - ss;
+	regs2.eip = sp->vdso_addr;  // gateway to int3
 
-	ptrace_write(sp, regs.eip, code, sizeof code);
 	ptrace_setregs(sp, &regs2);
-	ptrace_cont(sp, 0, true); // sync call, wait for it
+	ptrace_cont_syscall(sp, 0, true);   // enter...
+	ptrace_cont_syscall(sp, 0, true);   // ...and exit
 
 	/*
 	 * read back
@@ -124,9 +160,7 @@ int32_t inject_socketcall(struct tracedump *td, struct pid *sp, uint32_t sc_code
 	va_end(vl);
 
 	/* restore */
-	ptrace_write(sp, regs.eip, backup, sizeof backup);
 	ptrace_setregs(sp, &regs);
-
 	mmatic_free(stack);
 
 	return regs2.eax;
@@ -152,25 +186,23 @@ void inject_escape_socketcall(struct tracedump *td, struct pid *sp)
 
 void inject_restore_socketcall(struct tracedump *td, struct pid *sp)
 {
-	/* int 0x80, int3 */
-	unsigned char code[4] = { 0xcd, 0x80, 0xcc, 0 };
-	char backup[4];
 	struct user_regs_struct regs2;
 
-	/* backup */
-	ptrace_read(sp, sp->regs.eip, backup, 4);
+	/* prepare */
+	_prepare(sp);
+	memcpy(&regs2, &sp->regs, sizeof regs2);
+	regs2.eax = sp->regs.orig_eax;
+	regs2.eip = sp->vdso_addr;
 
 	/* exec */
-	sp->regs.eax = sp->regs.orig_eax;
-	ptrace_setregs(sp, &sp->regs);
-	ptrace_write(sp, sp->regs.eip, code, 4);
-	ptrace_cont(sp, 0, true);
+	ptrace_setregs(sp, &regs2);
+	ptrace_cont_syscall(sp, 0, true);
+	ptrace_cont_syscall(sp, 0, true);
 
-	/* read the return code */
+	/* rewrite the return code */
 	ptrace_getregs(sp, &regs2);
 	sp->regs.eax = regs2.eax;
 
 	/* restore */
 	ptrace_setregs(sp, &sp->regs);
-	ptrace_write(sp, sp->regs.eip, backup, 4);
 }
