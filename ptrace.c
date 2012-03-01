@@ -131,7 +131,7 @@ int ptrace_wait(struct pid *sp, int *st)
 		pid = rc;
 
 	if (WIFEXITED(status))
-		dbg(2, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
+		dbg(3, "wait(%d): process exited with status %d\n", pid, WEXITSTATUS(status));
 	else if (WIFSIGNALED(status))
 		dbg(2, "wait(%d): process terminated with signal %d\n", pid, WTERMSIG(status));
 	else if (WIFSTOPPED(status)) {
@@ -141,10 +141,11 @@ int ptrace_wait(struct pid *sp, int *st)
 			case SIGTRAPS:
 				break;
 			case SIGSEGV:
-				dbg(1, "wait(%d): process received SIGSEGV - segmentation fault\n", pid);
+				dbg(1, "wait(%d): process received SIGSEGV - segmentation fault (%s)\n",
+					pid, sp->cmdline);
 				break;
 			default:
-				dbg(2, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
+				dbg(5, "wait(%d): process received signal %d\n", pid, WSTOPSIG(status));
 		}
 	}
 

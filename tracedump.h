@@ -29,7 +29,7 @@
 
 #define TRACEDUMP_VERSION "0.5"
 
-//#define VDSO_PIGGYBACK
+#define VDSO_PIGGYBACK
 
 struct tracedump;
 struct pid;
