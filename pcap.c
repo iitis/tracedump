@@ -47,6 +47,7 @@ void pcap_init(struct tracedump *td)
 	/* open the resultant file */
 	if (streq(td->opts.outfile, "-")) {
 		td->pc->fp = stdout;
+		setvbuf(stdout, 0, _IOLBF, 0);
 	} else {
 		td->pc->fp = fopen(td->opts.outfile, "w");
 		if (!td->pc->fp) {
